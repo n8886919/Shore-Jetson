@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+# Run the current staged tree without exposing the RTSP URI on the command
+# line or in the transient systemd unit. Servo remains disabled by the
+# staging configuration.
+umask 077
+staging_root=/home/nolan/shore-tracker-deploy
+application="$staging_root/app-native-20260904"
+
+set -a
+. "$staging_root/secrets.env"
+set +a
+
+export PYTHONPATH="$application"
+exec "$staging_root/venv-native-test/bin/python" \
+    -m shore_tracker \
+    --config "$application/config/jetson-staging-live.toml" \
+    serve

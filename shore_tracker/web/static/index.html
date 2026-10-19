@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Shore Tracker · Kiosk</title>
+  <link rel="stylesheet" href="/kiosk.css">
+</head>
+<body>
+  <main class="kiosk">
+    <div class="stage">
+    <section class="viewer" aria-label="相機即時畫面">
+      <div id="noSignal" class="no-signal" aria-hidden="true"></div>
+      <img id="stream" alt="相機即時畫面">
+      <svg id="detectionOverlay" class="bbox-overlay" aria-label="人物辨識框"></svg>
+      <div id="streamNotice" class="stream-notice">等待相機畫面</div>
+    </section>
+    <section id="controlReadout" class="control-readout" aria-label="狀態與診斷" hidden>
+      <p id="operatorIssue" class="operator-issue" role="status" hidden></p>
+      <div class="readout-metrics"><span>預覽來源 <b id="previewFps">—</b> FPS</span><span>網頁上限 <b id="displayRate">5 FPS</b></span><span>辨識 <b id="inferenceFps">—</b> FPS</span><span>跟拍編號 <b id="targetId">—</b></span><span title="指令值，非實際位置回授">要求角度 <b id="servoTargetAngle">—</b></span></div>
+      <details><summary>連線與診斷</summary><div class="diagnostic-content"><div id="components" class="components"></div><p class="note">控制串口可用只代表 Jetson 可傳送指令；沒有控制板收件確認或 Servo 實際位置回授。</p><p id="reconnectReason"></p><button id="reconnectButton" disabled>重新連接相機</button><p id="commandResult" role="status"></p><dl><div><dt>自動恢復</dt><dd id="recoveryState">—</dd></div><div><dt>最近原因</dt><dd id="lastReason">—</dd></div></dl></div></details>
+    </section>
+    </div>
+    <aside id="controlsPanel" class="controls-panel" aria-label="相機與追蹤控制" hidden>
+      <header><h1>控制</h1><span id="connection" class="badge">讀取中</span></header>
+      <section class="panel-section"><h2>鏡頭</h2><div class="lens-buttons" role="group" aria-label="調焦"><button data-camera-action="focus_near" disabled>近焦</button><button data-camera-action="focus_far" disabled>遠焦</button></div><div class="lens-buttons" role="group" aria-label="光學變焦"><button data-camera-action="zoom_out" disabled>− 縮小</button><button data-camera-action="zoom_in" disabled>＋ 放大</button></div><p id="cameraMessage" class="note" role="status">讀取鏡頭狀態</p></section>
+      <section class="panel-section tuning-panel" aria-label="追蹤參數"><h2>追蹤與預覽</h2>
+        <label title="P gain：越高，跟隨目標時修正越快"><span>跟隨靈敏度</span><output id="panGainValue">45</output><input id="panGain" aria-label="跟隨靈敏度" type="range" min="1" max="120" step="1" value="45"></label>
+        <label title="畫面中心容許偏差，範圍內不修正"><span>中心容許範圍</span><output id="deadbandValue">0.04</output><input id="deadband" aria-label="中心容許範圍" type="range" min="0" max="0.2" step="0.01" value="0.04"></label>
+        <label title="預覽數位放大上限，不改變鏡頭或辨識全景"><span>預覽放大</span><output id="zoomMaxValue">1.0×</output><input id="zoomMax" aria-label="預覽放大" type="range" min="1" max="4" step="0.1" value="1"></label>
+        <label title="辨識執行頻率上限，與預覽 FPS 分開"><span>辨識頻率</span><output id="inferenceRateValue">2 Hz</output><input id="inferenceRate" aria-label="辨識頻率" type="range" min="1" max="10" step="1" value="2"></label>
+        <p id="tuningMessage" class="note" role="status"></p><p id="inferenceRateMessage" class="note" role="status"></p>
+      </section>
+      <section class="panel-section record-row"><button id="recordButton" aria-label="開始手動錄影" title="開始手動錄影" aria-pressed="false" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="record-ring" cx="12" cy="12" r="9"/><circle class="record-dot" cx="12" cy="12" r="6"/><rect class="record-stop" x="7" y="7" width="10" height="10" rx="1"/></svg></button><div><strong id="recordLabel">尚未錄影</strong><p id="recordStatus" class="note" role="status">讀取錄影狀態</p></div></section>
+    </aside>
+    <footer class="status-bar">
+      <div class="information">
+        <div id="liveInfo" aria-label="設備與錄影狀態"><span class="status-chip neutral">讀取狀態</span></div><strong id="phase" hidden></strong>
+      </div>
+      <button id="armButton" class="arm" disabled>開始追蹤</button>
+      <button id="controlToggle" class="control-link" type="button" aria-expanded="false" aria-controls="controlsPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6m8 4v6"/></svg><span id="controlToggleLabel">控制</span></button>
+    </footer>
+  </main>
+  <script src="/kiosk.js"></script>
+  <script type="module" src="/advanced.js"></script>
+</body>
+</html>

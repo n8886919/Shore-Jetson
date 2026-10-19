@@ -1,0 +1,42 @@
+# 自動跟拍、手動錄影與 SurfTrack
+
+主要流程以使用者 2026-09-05 確認的規則為準：
+
+1. ARM 後，先看見穩定追浪才開始試拍；相機維持 90°，尚不鎖定某個人。
+2. 在已看過追浪的人之中，第一位穩定起乘／轉入衝浪的人取得鎖定，開始 Servo 跟拍。直接出現已起乘／衝浪、未看過追浪的人不啟動此流程。
+3. 追浪結束後，若沒有發展成起乘／衝浪，停拍、回 90°、刪除該段自動試拍影片。只保留小型「已捨棄」紀錄，沒有影片上傳。
+4. 有效跟拍持續到起乘／衝浪都結束，或鎖定人物失聯逾時；完成影片後接收並上傳私人 Drive。回到追浪也算結束。
+
+「手動開始錄影／結束手動錄影」是額外觸發，沒有暫停功能，可在未 ARM 時使用。手動與自動同時觸發時共用一段影片，兩者都結束才收尾。只要該段曾包含手動觸發，就保留供訓練，不因自動試拍失敗而刪除。STOP 追蹤不會切斷仍啟用的手動錄影；結束手動錄影也不會切斷有效跟拍。背景 10 分鐘分段仍是另外的本機備份。
+
+沿用門檻：追浪 70%、起乘 65%、衝浪 70%；初次追浪與起乘鎖定各要求至少 3 次觀測、0.5 秒。跟拍只調整 `tracking.ride_exit_seconds`，預設 5 秒，同時供人物 ID 保留與有效跟拍退出使用。人物 ID 從最後一次成功配對的偵測起保留 5 秒；跟拍從最後一次同人物有效起乘／衝浪起算，滿 5 秒仍未恢復即收尾影片並回 90°。期限內同一人物恢復有效動作就重算 5 秒；漏偵測與低分交替不重置倒數。寬限期間漏偵測維持角度，有人物位置則繼續跟隨。ID 配對仍依框重疊，延長保留時間不保證遮蔽後必定接回同一人。未鎖定試拍中，所有合格動作消失 2 秒就捨棄；`finished_hold_seconds` 仍為試拍等待及結束冷卻的 2 秒。舊 `lost_grace_seconds` 已退出執行設定；舊 TOML 可載入該欄位，但它不再影響行為。影像／推論失聯的 1.5 秒停止控制保護不隨跟拍寬限放寬。
+
+事件影片是獨立 RTSP 連線的 H.264/H.265 原碼流 MKV，不重新壓縮、不包含聲音、預覽數位裁切或框線。結束會先等待容器完成，再發布到本機接收 API。有效跟拍或手動錄影的 partial 檔保留，不自動上傳。尚未合格的自動試拍會在停止後刪除影片。磁碟達停止門檻會結束所有錄影觸發。
+
+- Jetson：`/var/lib/shore-tracker/manual-recordings/<id>/clip.mkv` 與非機密中繼資料。
+- 電腦：`../surf-track/var/recordings/<id>/`。
+- 私人 Drive：`SurfTrackRecordings/<id>/clip.mkv` 和 `recording.json`。
+
+接收器透過 SSH loopback tunnel 下載已完成影片並核對 SHA-256，再使用 `surf_track.drive.upload.run_rclone`。這也是既有 IngestManager 共用的上傳函式；憑證仍只使用 surf-track 現有 Settings 與私人檔案，不複製到 Jetson。上傳成功需讀回 Drive ID。斷線自動重連、上傳失敗保留原檔重試；接收器不刪除已保存的影片，不更改 Drive 分享權限。Jetson 僅會刪除本次流程新產生且未合格、未手動保留的試拍影片。電腦或接收器沒開時，影片留在 Jetson 等待。
+
+用 `deploy/open-web jetson` 開啟網頁時也會啟動接收器；`jetson` 是使用者自行設定並驗證的 SSH host alias。單獨以前景方式執行接收器（持續至 Ctrl+C）：
+
+```sh
+python3 deploy/recording-sync.py --ssh jetson \
+  --known-hosts ~/.ssh/known_hosts --surf-track ../surf-track
+```
+
+執行前請確認 SSH alias 指向目前的 Jetson，並沿用已驗證且保存於 ~/.ssh/known_hosts 的主機金鑰。這個程式不安裝常駐服務；它自行重建掉線的 SSH tunnel。不要同時執行兩份接收器。
+
+之後抽圖標註（既有私人 Drive 必須可用）：
+
+```sh
+cd ../surf-track
+.venv/bin/python -m surf_track.recordings --prepare-local --sharer Jetson
+```
+
+每秒抽 1 張至既有 Store，建立可在 Dataset / Label 選取的資料集，並共用既有 Drive 上傳功能保存影格。依每段錄影 metadata 的 rotation_degrees 處理方向；原始 MKV 保持相機碼流方向。2026-09-09 使用者已手動翻轉相機，本機部署設定改為 0°，實際套用狀態需在目標 Jetson 上另行確認。設定生效後，新錄影會記錄 0°，抽圖不再旋轉；舊錄影原有的 180° metadata 保留，不回溯改寫。已處理影片可重跑而不重複建影格。完成標註後，在既有 Train 頁選 Jetson 分享者與遠端 GPU 主機開始訓練。
+
+同一影片所有影格屬於同一 source_group，不切散到不同 split；預設新增影片為 train。要留一批做驗證／測試，對尚未匯入影片使用 `--split valid` 或 `--split test`。這個功能不會自動開始訓練，也不改模型與舊資料集。
+
+追蹤推論、固定頻率 Servo 控制與錄影有各自的執行緒。影片下載由獨立 HTTP 請求處理，Google Drive 上傳在電腦上的獨立接收程序依序執行，追蹤不等待上傳結果。下載共用 Jetson 磁碟與網路資源。單一事件錄影器收尾期間，新錄影觸發等待容器／雜湊完成；Servo 追蹤持續。

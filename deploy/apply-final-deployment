@@ -1,0 +1,46 @@
+#!/bin/sh
+set -eu
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "run this finalizer through sudo" >&2
+    exit 1
+fi
+
+staging_root=/home/nolan/shore-tracker-deploy
+application="$staging_root/app-native-20260904"
+pid_file="$staging_root/runtime/staging.pid"
+
+if [ -f "$pid_file" ] && [ ! -L "$pid_file" ]; then
+    pid=$(sed -n '1p' "$pid_file")
+    case "$pid" in
+        ''|*[!0-9]*)
+            echo "invalid staging PID file" >&2
+            exit 1
+            ;;
+    esac
+    if kill -0 "$pid" 2>/dev/null; then
+        command_line=$(tr '\000' ' ' <"/proc/$pid/cmdline")
+        case "$command_line" in
+            *shore_tracker*jetson-staging-live.toml*) ;;
+            *)
+                echo "staging PID does not belong to Shore Tracker" >&2
+                exit 1
+                ;;
+        esac
+        kill -TERM "$pid"
+        attempt=0
+        while kill -0 "$pid" 2>/dev/null && [ "$attempt" -lt 35 ]; do
+            attempt=$((attempt + 1))
+            sleep 1
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "staging process did not finalize its MKV in time" >&2
+            exit 1
+        fi
+    fi
+fi
+
+exec "$application/deploy/install-disarmed.sh" \
+    "$application" \
+    "$staging_root/secrets.env" \
+    "$staging_root/models"

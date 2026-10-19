@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>控制 · Shore Tracker</title>
+  <link rel="stylesheet" href="/advanced.css">
+</head>
+<body>
+  <main>
+    <header><div><a id="backLink" class="back" href="/kiosk">← 返回即時畫面</a><h1>控制</h1><p>鏡頭、追蹤與錄影</p></div><div class="header-actions"><span id="connection" class="badge">讀取中</span><button id="controlStop" class="stop-control" title="停止傳送新目標，不切斷 Servo 電源" disabled>停止追蹤</button></div></header>
+    <p id="controlStopMessage" role="status"></p>
+    <p id="operatorIssue" class="operator-issue" role="status" hidden></p>
+    <div class="control-grid">
+      <section class="preview-column">
+        <div class="control-viewer"><div id="controlNoSignal" class="no-picture">等待相機畫面</div><img id="controlStream" src="/api/preview.mjpeg" alt="調整鏡頭時的即時預覽"></div>
+        <section class="card tuning-panel" aria-label="追蹤參數">
+          <label title="要求角度，非實際位置回授"><span>目標角度</span><input id="servoAngleSlider" type="range" min="0" max="180" step="0.1" value="90" disabled aria-label="Servo 目標角度（指令值）"><output id="servoTargetAngle">—</output></label>
+          <label><span>P gain</span><input id="panGain" type="range" min="1" max="120" step="1" value="45"><output id="panGainValue">45</output></label>
+          <label><span>畫面死區</span><input id="deadband" type="range" min="0" max="0.2" step="0.01" value="0.04"><output id="deadbandValue">0.04</output></label>
+          <label><span title="預覽數位放大上限，不改變鏡頭或辨識全景">預覽放大</span><input id="zoomMax" type="range" min="1" max="4" step="0.1" value="1"><output id="zoomMaxValue">1.0×</output></label>
+          <label title="實際辨識執行頻率上限，預覽幀率不變"><span>辨識頻率</span><input id="inferenceRate" type="range" min="1" max="10" step="1" value="2"><output id="inferenceRateValue">2 Hz</output></label>
+          <p id="inferenceRateMessage" role="status"></p>
+          <p id="tuningMessage" role="status"></p>
+        </section>
+      </section>
+      <div class="lens-column">
+        <section class="card lens-card"><div class="eyebrow">LENS</div><h2>鏡頭調整</h2>
+          <div class="lens-buttons" role="group" aria-label="調焦"><button data-camera-action="focus_near" disabled>近焦</button><button data-camera-action="focus_far" disabled>遠焦</button></div>
+          <p class="lens-caption">光學變焦</p><div class="lens-buttons" role="group" aria-label="光學變焦"><button data-camera-action="zoom_out" disabled>− 縮小</button><button data-camera-action="zoom_in" disabled>＋ 放大</button></div>
+          <p id="cameraMessage" class="note" role="status">讀取鏡頭狀態</p>
+        </section>
+        <section class="card recording-card"><div class="eyebrow">RECORDING</div><h2>手動錄影</h2>
+          <div class="record-row"><button id="recordButton" aria-label="開始手動錄影" title="開始手動錄影" aria-pressed="false" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="record-ring" cx="12" cy="12" r="9"/><circle class="record-dot" cx="12" cy="12" r="6"/><rect class="record-stop" x="7" y="7" width="10" height="10" rx="1"/></svg></button><div><strong id="recordLabel">尚未錄影</strong><p id="recordStatus" class="note" role="status">讀取錄影狀態</p></div></div>
+        </section>
+      </div>
+    </div>
+    <details class="diagnostics"><summary>連線與診斷 <span>相機、追蹤、自動恢復</span></summary>
+    <div class="grid">
+      <section class="card connection-card">
+        <div class="eyebrow">CAMERA CONNECTION</div><h2>相機連線</h2>
+        <div id="components" class="components" aria-label="元件狀態"></div>
+        <div class="metrics"><div><span>預覽 FPS</span><strong id="previewFps">—</strong></div><div><span>辨識 FPS</span><strong id="inferenceFps">—</strong></div><div><span>最新影格</span><strong id="frameAge">—</strong></div></div>
+        <div class="reconnect"><button id="reconnectButton" disabled>↻ 重新連接相機</button><p id="reconnectReason">讀取連線狀態</p></div>
+        <p class="note">重新連接會短暫中斷預覽。請先停止追蹤、結束錄影；恢復後仍維持停止追蹤。</p>
+        <p id="commandResult" role="status" aria-live="polite"></p>
+      </section>
+      <section class="card">
+        <div class="eyebrow">AUTOMATIC RECOVERY</div><h2>自動恢復</h2>
+        <dl><div><dt>目前狀態</dt><dd id="recoveryState">—</dd></div><div><dt>本次服務重連次數</dt><dd id="attempts">—</dd></div><div><dt>最近原因</dt><dd id="lastReason">—</dd></div><div><dt>最近嘗試</dt><dd id="lastAttempt">—</dd></div><div><dt>上次錄影片段收尾</dt><dd id="finalized">—</dd></div></dl>
+        <p class="note">串流失去回應時會自動重試。未完整收尾的片段會保留，不標記為成功影片。</p>
+      </section>
+      <section class="card">
+        <div class="eyebrow">VIDEO</div><h2>影像設定 <span class="readonly">唯讀</span></h2>
+        <dl><div><dt>串流編碼</dt><dd id="codec">—</dd></div><div><dt>畫面旋轉</dt><dd id="rotation">—</dd></div><div><dt>預覽目標幀率</dt><dd id="targetFps">—</dd></div></dl>
+        <p class="note">相機日期與名稱疊字需從相機設定關閉，目前尚未取得可用的管理權限。</p>
+      </section>
+      <section class="card">
+        <div class="eyebrow">SERVO / UART</div><h2>控制介面 <span class="readonly">唯讀</span></h2>
+        <dl><div><dt>跟拍狀態</dt><dd id="trackingPhase">—</dd></div><div><dt>跟拍編號</dt><dd id="targetId">—</dd></div><div><dt>控制協定</dt><dd id="protocol">—</dd></div><div><dt>串口與鮑率</dt><dd id="serial">—</dd></div><div><dt>角度範圍 / 中位</dt><dd id="angles">—</dd></div></dl>
+        <p class="note">跟拍編號是系統暫時分配的人物編號，不是人名，也不能用來指定人物。控制連線表示串口可用；目標角度不是實際位置回授。</p>
+      </section>
+    </div>
+    </details>
+    <footer><span id="updated">等待狀態</span><span>Shore Tracker · 控制</span></footer>
+  </main>
+  <script src="/advanced.js"></script>
+</body>
+</html>

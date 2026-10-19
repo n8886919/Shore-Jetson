@@ -1,0 +1,27 @@
+{
+  "files": {
+    "AGENTS.md": "e310b93941b5f097adbfdcf0445ae19c271188a71ccd22238d3c86367dfc4e21",
+    "CHANGELOG.md": "4c26a5c080a245e795676e02af45bb441b3a57a8fd416a3a0e93cd394ea8bd81",
+    "docs/hardware.md": "48a517f4bbe4e6333f5f9c73c910e6197da25224fe70a61b76892bb463266ce8",
+    "docs/interface.md": "54af83de821592cd43da4d47c371fa1df65a8acc4f8fb407db44344b463c6376",
+    "docs/motion-control.md": "2528e92682682f971ed18737218a5f72e855ec39a9b69115925d5fd26df789ba",
+    "docs/servo-controller-youmi-2026-10-10.md": "83944d3e3b157a8fb242e538b1f008d6bc0e5db4fbeb26b6d5682d3e3fe5a0a9",
+    "docs/uart-servo.md": "d466a5abb5e1e2d00ab3d9fd605e2ab3d0c3383a65252a34eabe522539def8bf",
+    "include/command_freshness.h": "1d1a7af43ca47612fc97d6da707e11e653904b030654b2e816365abfef407782",
+    "include/control_cadence.h": "cecfd003c850853b4fce8564d57e3f1f4c74ab69bf7d91b03ef9603f30e15cf3",
+    "include/firmware_version.h": "8d687517d9192a43b07cf691a57a4a0e8abc59143d5279565a08641b4f072843",
+    "include/protocol.h": "356488faef19ae3e1c566b447cd0c1827baef00536e6661491e7497178c530a4",
+    "include/servo_controller.h": "e4e63755ba7662a40d2335ad43a1f2fda340d08d861b6679605c978de797121a",
+    "include/servo_motion.h": "83b04776ffd3559d70eec8d4dadc341fbf3483f6011103a5d5173fd84f44a605",
+    "include/servo_profile.h": "a860c3afbd7275da7f4d6e19682edea88dc20456898cee06a00fcb954968d233",
+    "include/tracking_policy.h": "e5cec890fb985c073590df0d607e0640ce077b33816c45e8331956a0bd705dd9",
+    "include/uart_servo_mode.h": "ca6a19d6b24ac9df447443f7c2f177270744a0eb701d5eb5433633140a74364f",
+    "include/uart_set_parser.h": "bf87b319eb882cc83ec921325bb0f8277af98040f6ce45e018ad6804ff27d203",
+    "include/uart_target.h": "337315f9f0d86b5b8650c15b417ca0f949ad4a21e5b10f76a88a048ee7faaf30",
+    "src/main.cpp": "0dac80f0a47cf54baa27ca894fb497062baa27e44e02191a3a13ddea6da775d3",
+    "src/uart_servo_mode.cpp": "251b6f867b06706d49f687bf28f00e37a535d21e8c10a172188ec306d13c4623"
+  },
+  "firmware_version": "0.6-dev",
+  "git_head": "e88b1212b42c7a3cbc77930750aa22e61d946f65",
+  "schema": 1
+}

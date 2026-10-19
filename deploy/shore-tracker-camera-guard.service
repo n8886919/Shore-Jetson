@@ -1,0 +1,16 @@
+[Unit]
+Description=Confine Shore Tracker camera-subnet traffic to dedicated Ethernet
+After=network-pre.target
+Before=shore-tracker.service
+
+[Service]
+Type=oneshot
+ExecStartPre=-/usr/sbin/nft delete table inet shore_tracker_camera_guard
+ExecStart=/usr/sbin/nft -f /etc/shore-tracker/camera-guard.nft
+ExecReload=-/usr/sbin/nft delete table inet shore_tracker_camera_guard
+ExecReload=/usr/sbin/nft -f /etc/shore-tracker/camera-guard.nft
+ExecStop=-/usr/sbin/nft delete table inet shore_tracker_camera_guard
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

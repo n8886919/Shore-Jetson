@@ -1,0 +1,4 @@
+# Documentation-only addresses. Copy to shore-tracker-camera-lease.conf and
+# replace both values with the verified camera MAC and a lease in its subnet.
+# The populated file is local-only and ignored by Git.
+dhcp-host=02:00:00:00:00:01,192.0.2.2,infinite

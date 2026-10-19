@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+profile=codex-ipcam-temp
+interface=enP8p1s0
+attempt=0
+
+while [ "$attempt" -lt 60 ]; do
+    attempt=$((attempt + 1))
+    connection=$(nmcli -g GENERAL.CONNECTION device show "$interface" 2>/dev/null || true)
+    state=$(nmcli -g GENERAL.STATE device show "$interface" 2>/dev/null || true)
+    if [ "$connection" = "$profile" ] && [ "${state%% *}" = "100" ]; then
+        exit 0
+    fi
+    if nmcli connection up "$profile" ifname "$interface" >/dev/null 2>&1; then
+        exit 0
+    fi
+    sleep 1
+done
+
+echo "camera interface did not become ready" >&2
+exit 1

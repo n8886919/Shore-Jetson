@@ -1,0 +1,69 @@
+# Non-root overnight validation profile. The production installation keeps
+# the same behavior under /var/lib/shore-tracker after the final sudo update.
+data_dir = "/home/jetson-user/shore-tracker-deploy/runtime"
+
+[camera]
+rotation_degrees = 0
+preview_fps = 20
+interface = "enP8p1s0"
+rtsp_uri_env = "SHORE_TRACKER_RTSP_URI"
+codec = "h265"
+latency_ms = 250
+
+[inference]
+max_fps = 2.0
+enabled = true
+backend = "tensorrt"
+detector_model = "/home/jetson-user/shore-tracker-deploy/models/surfer_fcos_raw.onnx"
+action_model = "/home/jetson-user/shore-tracker-deploy/models/actions_mobilenet_v3_small.onnx"
+engine_dir = "/home/jetson-user/shore-tracker-deploy/models/engines"
+score_threshold = 0.50
+
+[recording]
+root = "/home/jetson-user/shore-tracker-deploy/runtime/recordings"
+segment_seconds = 600
+free_warning_gib = 120
+free_stop_gib = 100
+record_audio = false
+
+[servo]
+enabled = false
+# Select UART manually on the Shore-Spotter web page before starting tracking.
+transport = "serial"
+serial_device = "/dev/serial/by-id/replace-with-usb-ttl-adapter"
+serial_baud = 115200
+send_hz = 20
+angle_min_deg = 0.0
+angle_max_deg = 180.0
+search_min_deg = 20.0
+search_max_deg = 160.0
+home_deg = 90.0
+max_slew_deg_s = 30.0
+search_speed_deg_s = 8.0
+pan_gain_deg = 45.0
+pan_deadband = 0.04
+pan_direction = 0
+
+[tracking]
+chasing_threshold = 0.70
+takeoff_threshold = 0.65
+surfing_threshold = 0.70
+candidate_hold_seconds = 0.50
+finished_hold_seconds = 2.00
+ride_exit_seconds = 5.00
+frame_stale_seconds = 1.50
+
+[zoom]
+enabled = true
+maximum = 2.5
+target_box_height = 0.28
+edge_margin = 0.18
+fast_target_speed = 0.35
+slow_inference_seconds = 0.35
+zoom_in_per_second = 0.35
+zoom_out_per_second = 4.0
+
+[web]
+host = "127.0.0.1"
+port = 8090
+preview_stale_seconds = 2.0

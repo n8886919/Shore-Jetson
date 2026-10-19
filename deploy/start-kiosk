@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+url="http://127.0.0.1:8090"
+attempt=0
+while [ "$attempt" -lt 90 ]; do
+  if curl -fsS --max-time 1 "$url/healthz" >/dev/null 2>&1; then
+    break
+  fi
+  attempt=$((attempt + 1))
+  sleep 1
+done
+
+if command -v chromium >/dev/null 2>&1; then
+  exec chromium --kiosk --no-first-run --disable-session-crashed-bubble "$url/kiosk?display=local"
+fi
+if command -v chromium-browser >/dev/null 2>&1; then
+  exec chromium-browser --kiosk --no-first-run --disable-session-crashed-bubble "$url/kiosk?display=local"
+fi
+if command -v firefox >/dev/null 2>&1; then
+  exec firefox --kiosk "$url/kiosk?display=local"
+fi
+echo "No supported kiosk browser is installed; open $url manually." >&2
+exit 1

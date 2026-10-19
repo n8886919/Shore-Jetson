@@ -1,0 +1,27 @@
+[Unit]
+Description=Shore Tracker camera, recording, inference, and servo service
+After=network-online.target shore-tracker-camera-network.service shore-tracker-camera-guard.service
+Wants=network-online.target
+Requires=shore-tracker-camera-network.service shore-tracker-camera-guard.service
+
+[Service]
+Type=simple
+User=shore-tracker
+Group=shore-tracker
+SupplementaryGroups=video render dialout
+UMask=0077
+WorkingDirectory=/opt/shore-tracker
+EnvironmentFile=-/etc/shore-tracker/secrets.env
+ExecStart=/opt/shore-tracker/.venv/bin/python -m shore_tracker --config /etc/shore-tracker/config.toml serve
+Restart=on-failure
+RestartSec=3
+StateDirectory=shore-tracker
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/shore-tracker
+
+[Install]
+WantedBy=multi-user.target

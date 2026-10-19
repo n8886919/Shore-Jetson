@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Shore Tracker · 手機網頁</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main>
+    <section class="viewer">
+      <div id="noSignal" class="no-signal" aria-hidden="true"></div>
+      <img id="stream" src="/api/preview.mjpeg" alt="相機即時畫面">
+      <svg id="detectionOverlay" class="bbox-overlay" aria-label="人物辨識框"></svg>
+      <div class="viewer-status">
+        <span id="systemMode" class="pill muted">啟動中</span>
+      </div>
+      <div class="lens-controls" role="group" aria-label="鏡頭控制">
+        <button data-camera-action="focus_near" disabled>近焦</button>
+        <button data-camera-action="focus_far" disabled>遠焦</button>
+        <p id="cameraMessage" role="status" aria-live="polite"></p>
+      </div>
+      <div id="streamNotice" class="stream-notice">等待相機畫面</div>
+      <div class="overlay">
+        <div class="preview-stats">
+        <span>階段 <b id="phase">—</b></span>
+        <span>主角 <b id="targetId">—</b></span>
+        <span title="本機要求的目標角度，非控制板或實際位置回讀">servo角度 <b id="servoAngle">—</b></span>
+        <span>預覽 <b id="zoomScale">1.0×</b></span>
+        <span title="Jetson 產生預覽影像的幀率，非瀏覽器實際接收率">預覽 FPS <b id="previewFps">—</b></span>
+        <span>辨識 FPS <b id="inferenceFps">—</b></span>
+        </div>
+        <div class="zoom-controls" role="group" aria-label="光學變焦">
+          <button data-camera-action="zoom_in" aria-label="放大" title="放大" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><path d="m15 15 6 6M7 10h6M10 7v6"/></svg>
+          </button>
+          <button data-camera-action="zoom_out" aria-label="縮小" title="縮小" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6.5"/><path d="m15 15 6 6M7 10h6"/></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+    <aside>
+      <section class="actions">
+        <div id="liveInfo" class="status-line" tabindex="0" aria-label="即時狀態">等待狀態</div>
+        <div class="action-row">
+          <button id="armButton" class="arm" disabled>開始追蹤</button>
+          <button id="recordButton" class="record-icon" aria-label="開始手動錄影" title="開始手動錄影" aria-pressed="false" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle class="record-ring" cx="12" cy="12" r="9"/><circle class="record-dot" cx="12" cy="12" r="6"/><rect class="record-stop" x="7" y="7" width="10" height="10" rx="1"/></svg>
+          </button>
+        </div>
+        <p id="recordStatus" role="status">讀取錄影狀態</p>
+        <p id="armReason">等待相機、辨識與 UART 串口</p>
+      </section>
+      <a class="advanced-link" href="/control?mode=mobile">控制 <span aria-hidden="true">↗</span></a>
+      <div id="trackingPanel" class="tracking-panel">
+      <section class="card tuning">
+        <label class="servo-target" title="本機要求的目標角度，非控制板或實際位置回讀">
+          <span>servo角度</span><input id="servoAngleSlider" type="range" min="0" max="180" step="0.1" value="90" data-available="false" disabled aria-label="servo角度" aria-valuetext="尚無角度資料"><output id="servoTargetAngle">—</output>
+        </label>
+        <label>P gain <input id="panGain" type="range" min="1" max="120" step="1"><output id="panGainValue"></output></label>
+        <label title="畫面中心的容許偏差；Servo 角度死區由 Shore-Spotter 設定">畫面死區 <input id="deadband" type="range" min="0" max="0.2" step="0.01"><output id="deadbandValue"></output></label>
+        <label title="預覽數位放大上限">Max zoom <input id="zoomMax" type="range" min="1" max="4" step="0.1"><output id="zoomMaxValue"></output></label>
+      </section>
+      <section class="card log-card" aria-label="狀態與紀錄">
+        <div id="logWindow" class="log-window" tabindex="0" aria-label="最近 100 行紀錄，可捲動">
+          <div id="logEntries" role="log" aria-live="polite" aria-relevant="additions"></div>
+        </div>
+      </section>
+      </div>
+    </aside>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

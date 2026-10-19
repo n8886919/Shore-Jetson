@@ -1,0 +1,14 @@
+[Unit]
+Description=Activate the dedicated Shore Tracker camera Ethernet profile
+After=NetworkManager.service NetworkManager-wait-online.service
+Wants=NetworkManager-wait-online.service
+Requires=NetworkManager.service
+Before=shore-tracker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/shore-tracker/deploy/activate-camera-network
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Shore Tracker Kiosk
+Comment=Open the local 1024x600 control display
+Exec=/opt/shore-tracker/deploy/start-kiosk
+Terminal=false
+X-GNOME-Autostart-enabled=true

@@ -1,0 +1,53 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime state, recordings, generated previews, and model artifacts.
+var/
+recordings/
+*.mkv
+*.mp4
+*.onnx
+*.engine
+*.plan
+*.pt
+*.pth
+
+# Credentials and machine-local configuration never belong in source control.
+.env
+*.secret
+config/local.toml
+config/secrets.env
+var/secrets/
+
+
+# Build output and local agent/deployment records.
+build/
+dist/
+*.egg-info/
+.codex/
+.agents/
+AGENTS.md
+STATUS.md
+
+# Private media and device-specific network/deployment configuration.
+captures/
+footage/
+snapshots/
+config/jetson-staging-live.toml
+config/*.local.toml
+deploy/shore-tracker-camera-lease.conf
+deploy/shore-tracker-camera-guard.nft.template
+
+# Secret material and operational logs.
+.env.*
+*.env
+*.secret.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.log

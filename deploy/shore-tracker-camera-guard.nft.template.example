@@ -1,0 +1,14 @@
+# Documentation-only subnet: replace with the verified camera subnet.
+# Installed root-owned during Jetson commissioning. NetworkManager's shared
+# profile owns 192.0.2.0/24; camera-subnet traffic from the application must
+# never escape through Wi-Fi or another interface.
+
+define shore_camera_subnet = 192.0.2.0/24
+define shore_camera_interface = "enP8p1s0"
+
+table inet shore_tracker_camera_guard {
+    chain output {
+        type filter hook output priority filter; policy accept;
+        meta skuid "shore-tracker" ip daddr $shore_camera_subnet oifname != $shore_camera_interface drop
+    }
+}
