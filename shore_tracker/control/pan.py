@@ -21,8 +21,11 @@ class PanPlannerConfig:
     max_step_seconds: float = 0.10
     max_acceleration_deg_s2: float = 60.0
     gain_reference_seconds: float = 0.20
+    axis: str = "pan"
 
     def __post_init__(self) -> None:
+        if self.axis not in {"pan", "tilt"}:
+            raise ValueError("axis must be pan or tilt")
         values = (
             self.angle_min_deg,
             self.angle_max_deg,
@@ -110,18 +113,23 @@ class PanPlanner:
 
         distance = None
         if decision.target is not None:
-            error = decision.target.detection.box.pan_error
+            box = decision.target.detection.box
+            error = box.tilt_error if self.config.axis == "tilt" else box.pan_error
             # Keep the familiar gain scale at a fixed 200 ms reference, so
             # actual inference frequency never multiplies controller strength.
             requested = (0.0 if abs(error) <= self.config.deadband else
                          self.config.direction * error * self.config.pan_gain_deg
                          / self.config.gain_reference_seconds)
         else:
+            if self.config.axis == "tilt":
+                self._velocity = 0.0
+                return current_angle_deg
             distance = self.config.home_deg - current_angle_deg
             if abs(distance) < 1e-9:
                 self._velocity = 0.0
                 return self.config.home_deg
-            braking_speed = sqrt(2 * self.config.max_acceleration_deg_s2 * abs(distance))
+            braking_speed = min(self.config.search_speed_deg_s,
+                                sqrt(2 * self.config.max_acceleration_deg_s2 * abs(distance)))
             requested = braking_speed if distance > 0 else -braking_speed
         requested = self._clamp(requested, -self.config.max_slew_deg_s, self.config.max_slew_deg_s)
         max_change = self.config.max_acceleration_deg_s2 * elapsed

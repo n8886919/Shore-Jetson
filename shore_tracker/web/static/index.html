@@ -2,45 +2,77 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Shore Tracker · Kiosk</title>
+  <title>Shore Jetson · Kiosk</title>
   <link rel="stylesheet" href="/kiosk.css">
 </head>
 <body>
   <main class="kiosk">
+    <nav id="windowActions" class="window-actions" aria-label="視窗控制">
+      <button id="windowClose" class="window-action window-close" type="button" aria-label="關閉 kiosk 瀏覽器" title="關閉 kiosk 瀏覽器"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      <button id="windowScaleToggle" class="window-action" type="button" aria-label="縮小視窗以顯示桌面" title="縮小視窗以顯示桌面" aria-pressed="false"><svg class="shrink-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 16h14"/></svg><svg class="restore-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h11v11H8zM5 15V5h10"/></svg></button>
+    </nav>
     <div class="stage">
     <section class="viewer" aria-label="相機即時畫面">
       <div id="noSignal" class="no-signal" aria-hidden="true"></div>
-      <img id="stream" alt="相機即時畫面">
+      <video id="rtcStream" muted autoplay playsinline hidden aria-label="相機即時串流"></video>
+      <canvas id="stream" width="960" height="540" aria-label="相機即時畫面"></canvas>
+      <svg id="trackingZoneOverlay" class="tracking-zone-overlay" aria-label="跟拍容許區" aria-hidden="true"><rect id="trackingZoneFill"/><path id="trackingZoneEdges"/><path id="trackingZoneHorizontalEdges"/></svg>
       <svg id="detectionOverlay" class="bbox-overlay" aria-label="人物辨識框"></svg>
-      <div id="streamNotice" class="stream-notice">等待相機畫面</div>
-    </section>
-    <section id="controlReadout" class="control-readout" aria-label="狀態與診斷" hidden>
-      <p id="operatorIssue" class="operator-issue" role="status" hidden></p>
-      <div class="readout-metrics"><span>預覽來源 <b id="previewFps">—</b> FPS</span><span>網頁上限 <b id="displayRate">5 FPS</b></span><span>辨識 <b id="inferenceFps">—</b> FPS</span><span>跟拍編號 <b id="targetId">—</b></span><span title="指令值，非實際位置回授">要求角度 <b id="servoTargetAngle">—</b></span></div>
-      <details><summary>連線與診斷</summary><div class="diagnostic-content"><div id="components" class="components"></div><p class="note">控制串口可用只代表 Jetson 可傳送指令；沒有控制板收件確認或 Servo 實際位置回授。</p><p id="reconnectReason"></p><button id="reconnectButton" disabled>重新連接相機</button><p id="commandResult" role="status"></p><dl><div><dt>自動恢復</dt><dd id="recoveryState">—</dd></div><div><dt>最近原因</dt><dd id="lastReason">—</dd></div></dl></div></details>
     </section>
     </div>
-    <aside id="controlsPanel" class="controls-panel" aria-label="相機與追蹤控制" hidden>
-      <header><h1>控制</h1><span id="connection" class="badge">讀取中</span></header>
-      <section class="panel-section"><h2>鏡頭</h2><div class="lens-buttons" role="group" aria-label="調焦"><button data-camera-action="focus_near" disabled>近焦</button><button data-camera-action="focus_far" disabled>遠焦</button></div><div class="lens-buttons" role="group" aria-label="光學變焦"><button data-camera-action="zoom_out" disabled>− 縮小</button><button data-camera-action="zoom_in" disabled>＋ 放大</button></div><p id="cameraMessage" class="note" role="status">讀取鏡頭狀態</p></section>
-      <section class="panel-section tuning-panel" aria-label="追蹤參數"><h2>追蹤與預覽</h2>
-        <label title="P gain：越高，跟隨目標時修正越快"><span>跟隨靈敏度</span><output id="panGainValue">45</output><input id="panGain" aria-label="跟隨靈敏度" type="range" min="1" max="120" step="1" value="45"></label>
-        <label title="畫面中心容許偏差，範圍內不修正"><span>中心容許範圍</span><output id="deadbandValue">0.04</output><input id="deadband" aria-label="中心容許範圍" type="range" min="0" max="0.2" step="0.01" value="0.04"></label>
-        <label title="預覽數位放大上限，不改變鏡頭或辨識全景"><span>預覽放大</span><output id="zoomMaxValue">1.0×</output><input id="zoomMax" aria-label="預覽放大" type="range" min="1" max="4" step="0.1" value="1"></label>
-        <label title="辨識執行頻率上限，與預覽 FPS 分開"><span>辨識頻率</span><output id="inferenceRateValue">2 Hz</output><input id="inferenceRate" aria-label="辨識頻率" type="range" min="1" max="10" step="1" value="2"></label>
-        <p id="tuningMessage" class="note" role="status"></p><p id="inferenceRateMessage" class="note" role="status"></p>
+    <div class="controls-drawer">
+    <aside id="controlsPanel" class="controls-panel" aria-label="相機與追蹤控制" tabindex="-1" hidden>
+      <p id="controlFeedback" class="operator-issue" role="status" hidden></p>
+      <section class="panel-section"><h2>鏡頭</h2><div class="lens-buttons" role="group" aria-label="調焦"><button data-camera-action="focus_near" disabled>近焦</button><button data-camera-action="focus_far" disabled>遠焦</button></div><div class="lens-buttons" role="group" aria-label="光學變焦"><button data-camera-action="zoom_out" aria-label="光學縮小" title="光學縮小" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5M7.5 10.5h6"/></svg></button><button data-camera-action="zoom_in" aria-label="光學放大" title="光學放大" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5M7.5 10.5h6"/><path d="M10.5 7.5v6"/></svg></button></div></section>
+      <section id="servoTestPanel" class="panel-section" aria-label="PWM 雲台測試">
+        <button id="servoTestButton" class="reconnect-button" type="button" disabled>雲台測試</button>
+        <p id="servoTestState" class="servo-test-state" role="status" aria-live="polite" hidden></p>
       </section>
-      <section class="panel-section record-row"><button id="recordButton" aria-label="開始手動錄影" title="開始手動錄影" aria-pressed="false" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><circle class="record-ring" cx="12" cy="12" r="9"/><circle class="record-dot" cx="12" cy="12" r="6"/><rect class="record-stop" x="7" y="7" width="10" height="10" rx="1"/></svg></button><div><strong id="recordLabel">尚未錄影</strong><p id="recordStatus" class="note" role="status">讀取錄影狀態</p></div></section>
-    </aside>
-    <footer class="status-bar">
+      <section id="panTiltPanel" class="panel-section pan-tilt-panel" aria-label="雲台手動控制">
+        <h2>雲台手動控制</h2>
+        <div class="pan-tilt-actions"><button id="panTiltConnect" type="button" disabled>連接雲台</button><button id="panTiltArm" type="button" disabled>啟用手動</button></div>
+        <label class="pan-tilt-speed" for="panTiltSpeed"><span>移動速度</span><output id="panTiltSpeedValue">8 / 63</output><input id="panTiltSpeed" type="range" min="1" max="63" value="8" disabled></label>
+        <div class="pan-tilt-pad" role="group" aria-label="按住方向移動，放開停止">
+          <button data-pan-tilt-direction="up" type="button" aria-label="雲台向上" disabled>↑</button>
+          <button data-pan-tilt-direction="left" type="button" aria-label="雲台向左" disabled>←</button>
+          <button id="panTiltStop" class="pan-tilt-stop" type="button" disabled>停止</button>
+          <button data-pan-tilt-direction="right" type="button" aria-label="雲台向右" disabled>→</button>
+          <button data-pan-tilt-direction="down" type="button" aria-label="雲台向下" disabled>↓</button>
+        </div>
+        <p class="pan-tilt-hint">按住移動，放開停止；每次最長 2 秒。</p>
+        <p id="panTiltState" class="pan-tilt-state" role="status" aria-live="polite">讀取雲台狀態</p>
+      </section>
+      <section class="panel-section tuning-panel" aria-label="追蹤參數">
+        <label class="switch-row"><span>啟用俯仰</span><span class="ios-switch"><input id="tiltEnabled" type="checkbox" role="switch" aria-label="啟用俯仰" disabled><span class="switch-track" aria-hidden="true"></span></span></label>
+        <label><span>跟拍容許區</span><output id="deadbandValue">40%</output><input id="deadband" aria-label="跟拍容許區" type="range" min="0.05" max="0.4" step="0.005" value="0.20"></label>
+        <label><span>畫面放大</span><output id="zoomMaxValue">1.0×</output><input id="zoomMax" aria-label="畫面放大" type="range" min="1" max="4" step="0.1" value="1"></label>
+
+      </section>
+      <section class="panel-section tuning-panel" aria-label="錄影"><label class="switch-row recording-mode"><span>連續錄影</span><span class="ios-switch"><input id="continuousRecording" type="checkbox" role="switch" aria-label="連續錄影" disabled><span class="switch-track" aria-hidden="true"></span></span></label></section>
+    <section id="controlReadout" class="control-readout" aria-label="狀態與診斷">
+      <p id="operatorIssue" class="operator-issue" role="status"></p>
+      <p id="commandResult" role="status" aria-live="polite" hidden></p>
+    </section>
+      <section id="liveInformation" class="panel-section live-information" aria-label="即時資訊">
+        <h2>即時資訊</h2>
       <div class="information">
-        <div id="liveInfo" aria-label="設備與錄影狀態"><span class="status-chip neutral">讀取狀態</span></div><strong id="phase" hidden></strong>
+        <div id="liveInfo" aria-label="設備與錄影狀態"><span class="status-chip neutral">讀取狀態</span></div><span id="inferenceLamp" class="status-chip good inference-lamp"><span id="inferenceDot" class="inference-dot" aria-hidden="true"></span>辨識正常</span><strong id="phase" class="status-chip phase-searching" hidden></strong><span id="streamNotice" class="stream-notice">等待相機畫面</span>
       </div>
+      </section>
+    </aside>
+    </div>
+    <footer class="status-bar">
       <button id="armButton" class="arm" disabled>開始追蹤</button>
-      <button id="controlToggle" class="control-link" type="button" aria-expanded="false" aria-controls="controlsPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6m8 4v6"/></svg><span id="controlToggleLabel">控制</span></button>
+    <nav id="controlRail" class="control-rail" aria-label="控制選單">
+      <button id="controlToggle" class="control-link control-toggle" type="button" aria-expanded="false" aria-controls="controlsPanel" aria-label="控制"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.50 9.85 L21.85 10.26 L21.85 13.74 L19.50 14.15 L18.82 15.78 L20.19 17.74 L17.74 20.19 L15.78 18.82 L14.15 19.50 L13.74 21.85 L10.26 21.85 L9.85 19.50 L8.22 18.82 L6.26 20.19 L3.81 17.74 L5.18 15.78 L4.50 14.15 L2.15 13.74 L2.15 10.26 L4.50 9.85 L5.18 8.22 L3.81 6.26 L6.26 3.81 L8.22 5.18 L9.85 4.50 L10.26 2.15 L13.74 2.15 L14.15 4.50 L15.78 5.18 L17.74 3.81 L20.19 6.26 L18.82 8.22 Z" stroke-linejoin="round"/><circle cx="12" cy="12" r="3.2"/></svg><span id="controlToggleLabel" class="sr-only">控制</span></button>
+    </nav>
+
     </footer>
   </main>
+  <script src="/streaming.js"></script>
   <script src="/kiosk.js"></script>
   <script type="module" src="/advanced.js"></script>
+  <script type="module" src="/pan-tilt.js"></script>
+  <script type="module" src="/servo-test.js"></script>
 </body>
 </html>

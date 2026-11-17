@@ -3,26 +3,31 @@ from __future__ import annotations
 import json
 import mimetypes
 import re
+import secrets
 import shutil
 import socket
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 from importlib.resources import files
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 from shore_tracker.controller import AppController
 from shore_tracker.preview import PreviewStore
 from shore_tracker.status import StatusStore
+from shore_tracker.web.desktop import set_kiosk_compact
 
 
 MAX_REQUEST_BODY_BYTES = 4096
+_LAN_NETWORKS = tuple(ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
 
 def _validated_loopback_address(
-    address: tuple[str, int],
+    address: tuple[str, int], *, allow_lan: bool = False,
 ) -> tuple[tuple[str, int], socket.AddressFamily]:
     try:
         host, port = address
@@ -39,7 +44,7 @@ def _validated_loopback_address(
         parsed = ip_address(host)
     except ValueError as exc:
         raise ValueError("dashboard bind host must be a loopback address") from exc
-    if not parsed.is_loopback:
+    if not parsed.is_loopback and not (allow_lan and host == "0.0.0.0"):
         raise ValueError("dashboard bind host must be a loopback address")
 
     family = socket.AF_INET6 if parsed.version == 6 else socket.AF_INET
@@ -57,12 +62,15 @@ class DashboardServer(ThreadingHTTPServer):
         controller: AppController,
         preview: PreviewStore,
         preview_stale_seconds: float,
+        allow_lan: bool = False,
     ) -> None:
-        address, self.address_family = _validated_loopback_address(address)
+        address, self.address_family = _validated_loopback_address(address, allow_lan=allow_lan)
+        self.allow_lan = allow_lan
         self.status_store = status
         self.controller = controller
         self.preview_store = preview
         self.preview_stale_seconds = preview_stale_seconds
+        self.pan_tilt_token = secrets.token_urlsafe(32)
         super().__init__(address, DashboardHandler)
 
 
@@ -89,10 +97,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             hostname, separator, port = value.rpartition(":")
             if not separator or not port.isdigit():
                 hostname = value
-        return hostname in {"127.0.0.1", "localhost", "[::1]"}
+        if hostname in {"127.0.0.1", "localhost", "[::1]"}:
+            return True
+        return self.server.allow_lan and hostname == self.connection.getsockname()[0]
 
     def _reject_nonlocal_host(self) -> bool:
-        if self._valid_loopback_host():
+        peer = ip_address(self.client_address[0])
+        private_peer = peer.is_loopback or any(peer in ip_address_net for ip_address_net in _LAN_NETWORKS)
+        if private_peer and self._valid_loopback_host():
             return False
         self._json(
             HTTPStatus.MISDIRECTED_REQUEST,
@@ -152,7 +164,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return False
 
         normalized_length = raw_length.lstrip("0") or "0"
-        maximum = str(MAX_REQUEST_BODY_BYTES)
+        maximum = str(32768 if urlsplit(self.path).path == "/api/stream/webrtc" else MAX_REQUEST_BODY_BYTES)
         if len(normalized_length) > len(maximum) or (
             len(normalized_length) == len(maximum)
             and normalized_length > maximum
@@ -175,7 +187,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return payload if isinstance(payload, dict) else None
 
     def _static(self, name: str) -> None:
-        if name not in {"index.html", "mobile.html", "app.css", "app.js", "kiosk.css", "kiosk.js", "advanced.html", "advanced.css", "advanced.js"}:
+        if name not in {"index.html", "mobile.html", "app.css", "app.js", "kiosk.css", "kiosk.js", "streaming.js", "advanced.html", "advanced.css", "advanced.js", "pan-tilt.js", "servo-test.js"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         body = files("shore_tracker.web.static").joinpath(name).read_bytes()
@@ -183,7 +195,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", f"{content_type}; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self'; media-src 'self' blob:; style-src 'self'; script-src 'self'; frame-ancestors 'none'")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Content-Length", str(len(body)))
@@ -204,10 +216,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", "0")
             self.end_headers()
-        elif path in {"/advanced.css", "/advanced.js", "/kiosk.css", "/kiosk.js"}:
+        elif path in {"/advanced.css", "/advanced.js", "/kiosk.css", "/kiosk.js", "/streaming.js", "/pan-tilt.js", "/servo-test.js"}:
             self._static(path[1:])
+        elif path == "/api/stream":
+            encoder = getattr(self.server, "h264_preview", None)
+            self._json(HTTPStatus.OK, {"webrtc": encoder is not None,
+                                      "encoder_active": bool(encoder and encoder.active)})
+        elif path == "/api/preview.ts":
+            encoder = getattr(self.server, 'h264_preview', None)
+            if not ip_address(self.client_address[0]).is_loopback or encoder is None:
+                self.send_error(HTTPStatus.FORBIDDEN)
+                return
+            encoder.stream(self)
+        elif path == "/api/local-display":
+            if not ip_address(self.client_address[0]).is_loopback:
+                self._json(HTTPStatus.FORBIDDEN, {"ok": False})
+                return
+            display = getattr(self.server, 'local_display', None)
+            self._json(HTTPStatus.OK, {"path": str(display.path) if display and display.path else None,
+                "camera_interface": getattr(self.server, 'camera_interface', 'eth0'),
+                "web_port": self.server.server_port, "lan_access": self.server.allow_lan})
         elif path == "/api/diagnostics":
             self._json(HTTPStatus.OK, self.server.controller.diagnostics())
+        elif path == "/api/pan-tilt":
+            self._json(HTTPStatus.OK, {**self.server.controller.pan_tilt_snapshot(),
+                       "control_token": self.server.pan_tilt_token,
+                       "offline_preview": self.server.status_store.snapshot().get("offline_preview", False)})
+        elif path == '/api/servo-test':
+            self._json(HTTPStatus.OK, {**self.server.controller.servo_test_snapshot(),
+                       'control_token': self.server.pan_tilt_token,
+                       'offline_preview': self.server.status_store.snapshot().get('offline_preview', False)})
         elif path == "/app.css":
             self._static("app.css")
         elif path == "/app.js":
@@ -223,6 +261,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, snapshot)
         elif path == "/api/preview.mjpeg":
             self._mjpeg()
+        elif path == "/api/display-frame":
+            self._display_frame()
         elif path == "/api/recordings":
             recorder = self.server.controller.recording
             self._json(HTTPStatus.OK, {'recordings': recorder.recordings() if recorder else []})
@@ -247,19 +287,157 @@ class DashboardHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
+    def _display_frame(self):
+        try:
+            after = float(parse_qs(urlsplit(self.path).query).get('after', ['0'])[0])
+            if not 0 <= after < float('inf'):
+                raise ValueError()
+        except ValueError:
+            self.send_error(HTTPStatus.BAD_REQUEST)
+            return
+        frame = self.server.preview_store.wait_after(after, timeout=.4)
+        if frame is None:
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header('Content-Length', '0')
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            return
+        status = self.server.status_store.snapshot()
+        recognition = status['recognition']
+        recognized = status['inference_run_id'] is not None and recognition['available']
+        metadata = {'cursor': frame.sequence, 'run_id': status['inference_run_id'],
+                    'recognized': recognized,
+                    'recognition': recognition if recognized else None,
+                    'delay_ms': max(0, round((time.monotonic() - frame.captured_monotonic) * 1000)),
+                    'pipeline_delay_ms': frame.pipeline_delay_ms}
+        self.send_response(HTTPStatus.OK)
+        self.send_header('Content-Type', 'image/jpeg')
+        self.send_header('Content-Length', str(len(frame.jpeg)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Frame-Meta', json.dumps(metadata, separators=(',', ':')))
+        self.end_headers()
+        try:
+            self.wfile.write(frame.jpeg)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         if self._reject_nonlocal_host():
             return
         path = urlsplit(self.path).path
         if not self._consume_bounded_request_body():
             return
-        if path in {"/api/recording", "/api/recordings/ack"}:
+        origin = self.headers.get('Origin')
+        if ((origin is not None and origin != 'http://' + self.headers.get('Host', ''))
+                or (origin is None and not ip_address(self.client_address[0]).is_loopback)):
+            self._json(HTTPStatus.FORBIDDEN, {'ok': False})
+            return
+        if path == "/api/stream/webrtc":
+            if getattr(self.server, 'h264_preview', None) is None or self.headers.get_content_type() != 'application/sdp':
+                self.send_error(HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            offer = self._request_body
+            try:
+                request = Request('http://127.0.0.1:1984/api/webrtc?src=preview', data=offer,
+                                  headers={'Content-Type': 'application/sdp'})
+                with urlopen(request, timeout=8) as response:
+                    answer = response.read(32769)
+                if len(answer) > 32768:
+                    raise ValueError('SDP too large')
+            except (OSError, ValueError, URLError):
+                self.send_error(HTTPStatus.BAD_GATEWAY)
+                return
+            self.send_response(HTTPStatus.OK)
+            self.send_header('Content-Type', 'application/sdp')
+            self.send_header('Content-Length', str(len(answer)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(answer)
+            return
+        if path == '/api/servo-test':
+            origin = self.headers.get('Origin')
+            if ((origin is not None and origin != 'http://' + self.headers.get('Host', ''))
+                    or self.headers.get_content_type() != 'application/json'
+                    or not secrets.compare_digest(self.headers.get('X-Pan-Tilt-Token', ''), self.server.pan_tilt_token)):
+                self._json(HTTPStatus.FORBIDDEN, {'ok': False, 'detail': '請重新開啟設定頁'})
+                return
+            payload = self._json_body()
+            fields = {'start': {'epoch'}, 'heartbeat': {'session', 'sequence'}, 'stop': set()}
+            action = payload.get('action') if payload else None
+            if (not isinstance(action, str) or action not in fields
+                    or set(payload) - {'action'} != fields[action]):
+                self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'detail': '測試指令格式無效'})
+                return
+            try:
+                result = self.server.controller.servo_test_command(action,
+                    {key: value for key, value in payload.items() if key != 'action'})
+            except (TypeError, ValueError) as exc:
+                self._json(HTTPStatus.CONFLICT, {'ok': False, 'detail': str(exc)})
+                return
+            except (OSError, ImportError):
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {'ok': False, 'detail': '舵機串口操作失敗，測試已中止'})
+                return
+            self._json(HTTPStatus.OK, result)
+            return
+        elif path == "/api/pan-tilt":
+            origin = self.headers.get("Origin")
+            if ((origin is not None and origin != "http://" + self.headers.get("Host", ""))
+                    or self.headers.get_content_type() != "application/json"
+                    or not secrets.compare_digest(self.headers.get("X-Pan-Tilt-Token", ""), self.server.pan_tilt_token)):
+                self._json(HTTPStatus.FORBIDDEN, {"ok": False, "detail": "請重新開啟主設定頁"})
+                return
+            payload = self._json_body()
+            fields = {"connect": set(), "disconnect": set(), "arm": {"epoch"},
+                      "move": {"session", "sequence", "direction", "speed"},
+                      "stop": {"session", "sequence"}, "disarm": {"session", "sequence"}}
+            action = payload.get("action") if payload else None
+            if (not isinstance(action, str) or action not in fields
+                    or set(payload) - {"action"} != fields[action]):
+                self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "detail": "雲台指令格式無效"})
+                return
+            try:
+                result = self.server.controller.pan_tilt_command(action,
+                    {key: value for key, value in payload.items() if key != "action"})
+            except (TypeError, ValueError) as exc:
+                self._json(HTTPStatus.CONFLICT, {"ok": False, "detail": str(exc)})
+                return
+            except (OSError, ImportError):
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE,
+                           {"ok": False, "detail": "雲台串口操作失敗，請檢查連接與停止狀態"})
+                return
+            self._json(HTTPStatus.OK, result)
+        elif path == "/api/kiosk/window":
+            if not ip_address(self.client_address[0]).is_loopback:
+                self._json(HTTPStatus.FORBIDDEN, {"ok": False})
+                return
+            origin = self.headers.get("Origin")
+            if ((origin is not None and origin != "http://" + self.headers.get("Host", ""))
+                    or self.headers.get_content_type() != "application/json"):
+                self._json(HTTPStatus.FORBIDDEN, {"ok": False})
+                return
+            payload = self._json_body()
+            if payload is None or set(payload) != {"compact"} or type(payload["compact"]) is not bool:
+                self._json(HTTPStatus.BAD_REQUEST, {"ok": False})
+                return
+            try:
+                result = set_kiosk_compact(payload["compact"])
+            except RuntimeError as exc:
+                self._json(HTTPStatus.CONFLICT, {"ok": False, "detail": str(exc)})
+                return
+            self._json(HTTPStatus.OK, {"ok": True, **result})
+        elif path in {"/api/recording", "/api/recording/mode", "/api/recordings/ack"}:
             origin = self.headers.get('Origin')
             if (origin is not None and origin != 'http://' + self.headers.get('Host', '')) or self.headers.get_content_type() != 'application/json':
                 self._json(HTTPStatus.FORBIDDEN, {'ok': False})
                 return
             payload = self._json_body()
-            if path == '/api/recording':
+            if path == '/api/recording/mode':
+                if payload is None or set(payload) != {'continuous'} or type(payload['continuous']) is not bool:
+                    self._json(HTTPStatus.BAD_REQUEST, {'ok': False})
+                    return
+                ok, detail = self.server.controller.set_recording_mode(payload['continuous'])
+                self._json(HTTPStatus.OK if ok else HTTPStatus.CONFLICT, {'ok': ok, 'detail': detail})
+            elif path == '/api/recording':
                 if payload is None or set(payload) != {'action'} or not isinstance(payload['action'], str) or payload['action'] not in {'start', 'stop'}:
                     self._json(HTTPStatus.BAD_REQUEST, {'ok': False})
                     return
@@ -318,17 +496,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
             payload = self._json_body()
             value = payload.get("max_fps") if payload is not None else None
             if (payload is None or set(payload) != {"max_fps"}
-                    or type(value) not in {int, float} or not 1 <= value <= 10):
-                self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "detail": "辨識頻率必須介於 1–10 Hz"})
+                    or type(value) not in {int, float} or not (value == 0 or 1 <= value <= 10)):
+                self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "detail": "辨識頻率必須為 0（不限速）或介於 1–10 Hz"})
                 return
             ok, detail = self.server.controller.set_inference_rate(value)
             self._json(HTTPStatus.OK if ok else HTTPStatus.CONFLICT,
                        {"ok": ok, "detail": detail, "max_fps": float(value) if ok else None})
         elif path == "/api/tuning":
             payload = self._json_body()
-            if payload is None or set(payload) != {
-                "pan_gain_deg", "pan_deadband", "pan_direction", "zoom_maximum"
-            }:
+            required = {"pan_gain_deg", "pan_deadband", "pan_direction", "zoom_maximum"}
+            if (payload is None or not required <= set(payload)
+                    or set(payload) - required - {"tilt_enabled"}
+                    or ("tilt_enabled" in payload and type(payload["tilt_enabled"]) is not bool)):
                 self._json(
                     HTTPStatus.BAD_REQUEST,
                     {"ok": False, "detail": "invalid tuning payload"},
@@ -339,6 +518,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 pan_deadband=payload["pan_deadband"],
                 pan_direction=payload["pan_direction"],
                 zoom_maximum=payload["zoom_maximum"],
+                **({"tilt_enabled": payload["tilt_enabled"]} if "tilt_enabled" in payload else {}),
             )
             self._json(
                 HTTPStatus.OK if ok else HTTPStatus.BAD_REQUEST,
@@ -397,6 +577,7 @@ def make_server(
     preview: PreviewStore,
     *,
     preview_stale_seconds: float = 2.0,
+    allow_lan: bool = False,
 ) -> DashboardServer:
     return DashboardServer(
         address,
@@ -404,4 +585,5 @@ def make_server(
         controller,
         preview,
         preview_stale_seconds,
+        allow_lan,
     )

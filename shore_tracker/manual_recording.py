@@ -192,8 +192,8 @@ class ManualRecording:
                 try: clip.abort()
                 except Exception: pass
             # Only this new, automatic, never-qualified event may be deleted.
-            # Manual overlap always preserves the clip for labeling.
-            if 'manual' not in data.get('triggers', []) and not data.get('qualified'):
+            # Manual or continuous overlap always preserves the clip.
+            if not {'manual', 'continuous'}.intersection(data.get('triggers', [])) and not data.get('qualified'):
                 try:
                     partial.unlink(missing_ok=True)
                     (directory / 'clip.mkv').unlink(missing_ok=True)

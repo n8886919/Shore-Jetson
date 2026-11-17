@@ -154,11 +154,11 @@ if ! systemctl is-active --quiet shore-tracker-camera-guard.service; then
     exit 1
 fi
 if ! systemctl is-active --quiet shore-tracker.service; then
-    echo "deployment failed: shore tracker is not active" >&2
+    echo "deployment failed: Shore Jetson is not active" >&2
     exit 1
 fi
 
 echo "deployment=disarmed"
 echo "archive=local_mkv_only"
-echo "servo=ready_manual_arm"
+echo "servo=disabled_pending_rs485_calibration"
 echo "inference=native_tensorrt"

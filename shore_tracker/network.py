@@ -53,7 +53,10 @@ def interface_ipv4(interface: str, *, executor: Executor = _run) -> InterfaceIPv
         raise NetworkInterfaceError(f"interface {interface} is unavailable")
     try:
         payload: Any = json.loads(result.stdout)
-        entries = payload[0]["addr_info"]
+        # iproute2 4.15 (JetPack 4) emits empty placeholder objects before
+        # and after the selected interface. Match the actual interface row.
+        entries = [entry for item in payload if item.get("ifname") == interface
+                   for entry in item.get("addr_info", [])]
         candidates = [
             entry
             for entry in entries
@@ -89,8 +92,7 @@ def route_interface(destination: str, *, executor: Executor = _run) -> str:
     if result.returncode != 0:
         raise NetworkInterfaceError("destination has no route")
     try:
-        payload = json.loads(result.stdout)
-        interface = payload[0]["dev"]
+        interface = _route_item(result.stdout, address)["dev"]
         if not isinstance(interface, str) or not interface:
             raise ValueError
         return interface
@@ -111,8 +113,7 @@ def route_ipv4(destination: str, *, executor: Executor = _run) -> RouteIPv4:
     if result.returncode != 0:
         raise NetworkInterfaceError("destination has no route")
     try:
-        payload: Any = json.loads(result.stdout)
-        item = payload[0]
+        item = _route_item(result.stdout, address)
         interface = item["dev"]
         source = item.get("prefsrc", item.get("src"))
         gateway_value = item.get("gateway")
@@ -129,3 +130,20 @@ def route_ipv4(destination: str, *, executor: Executor = _run) -> RouteIPv4:
         return RouteIPv4(interface=interface, source=source, gateway=gateway)
     except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise NetworkInterfaceError("route output is invalid") from exc
+
+
+def _route_item(output: str, destination: str) -> dict[str, Any]:
+    if output.lstrip().startswith("["):
+        return json.loads(output)[0]
+    # Older iproute2 accepts -j but still prints route-get output as text.
+    # Require the exact literal destination and preserve gateway/source checks.
+    words = output.splitlines()[0].split()
+    if not words or words[0] != destination:
+        raise ValueError("unexpected route destination")
+    result = {}
+    for token, key in (("dev", "dev"), ("src", "src"), ("via", "gateway")):
+        if words.count(token) > 1:
+            raise ValueError("ambiguous route field")
+        if token in words:
+            result[key] = words[words.index(token) + 1]
+    return result

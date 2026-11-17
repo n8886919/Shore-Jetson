@@ -1,50 +1,76 @@
-# GXServo 42 kg / 180 degrees with direct UART
+# PWM servo 與 Jetson 硬體
 
-This project retains the GXServo 42 kg, 180-degree servo, centre 90 degrees.
-Do not copy the sibling Shore-Spotter project's Youmi 359-degree profile.
-The separate two-channel controller uses M0, 9600 8N1 and ASCII pulse commands.
+使用者於 **2026-11-14** 再次確認已收起 RS485 雲台，換回以下路徑：
 
-## Wiring selected on 2026-10-17
+```text
+Jetson USB → CH340G USB-TTL → M0／M1 雙通道控制板 → 兩顆 180° PWM servo
+符合目前控制板與馬達額定值的獨立電源 → 控制板／servo
+```
 
-Power equipment off before moving wires. Physical header numbers:
+這是已確認的硬體選擇，未證明目前每條線、通道、方向、供電電壓或機械限制。
+換線先斷電；USB-TTL 的訊號電位、TX→控制板 RX、共地及電源隔離需按當前設備核對。
+不要把馬達電源接入 USB-TTL／Jetson 邏輯電源，也不沿用 RS485 的 A／B 或 12 V 接法。
+CH340G 裝置身分應重新核對，優先 `/dev/serial/by-id/`，不依 `ttyUSB` 編號猜值。
 
-| Jetson Orin Nano 40-pin J12 | Controller |
+程式 `m0_pulse` 使用 9600 8N1、ASCII `#00Pxxxx!`／`#01Pxxxx!`；控制板產生 PWM。
+0–180°／500–2500 µs 是命令映射，不是當前機構的可用行程或位置回授。
+兩顆 servo 的品牌／型號、額定供電、負載、中立及端點仍待依實物核對；
+不能由舊 GXServo 42 kg 紀錄推定目前兩顆的規格。
+原始控制板圖片與 2026-10-30／31 紀錄見[歷史 M0 資料](legacy-m0-controller.md)，
+其中的通道與方向不當作換回後驗收。現行軟體、設定落差與 STOP 語意見
+[控制契約](servo-controller.md)，實機另依[驗收流程](commissioning.md)處理。
+
+## 歷史 RS485 雲台紙本規格
+
+以下屬於已收起的 **RS485 雲台**，品牌與型號未確認；不適用現行 PWM。
+
+以下逐項核對使用者提供的[原始掃描件第 6–7 頁](assets/manuals/camera-and-rs485-pan-tilt-20261106.pdf#page=6)。
+這些是文件規格，沒有完成本機構的實測驗收；實際零點、正負方向、機械端點與速度級別對照仍未確認。
+
+| 項目 | 紙本所載 |
 | --- | --- |
-| Pin 8, UART1 TX, 3.3 V | RX |
-| Pin 6, GND | GND |
-| Pin 10, RX | Leave disconnected; controller TX voltage/feedback is not established |
-| 3.3 V / 5 V power pins | Do not connect |
+| 類型 | 電動支架雲台，水平／俯仰兩軸 |
+| 水平行程 | −90°～90° |
+| 俯仰行程 | −15°～30° |
+| 水平速度 | 10°/s |
+| 俯仰速度 | 3°/s |
+| 通訊 | 1 路 RS-485、PELCOD、9600 baud、地址 1 |
+| 電源 | DC 12 V ±20%；當時使用獨立 12 V 供電 |
+| 電流／最大功耗 | DC 12 V、0.30 A；最大功耗 3.9 W |
+| 承重 | 2 kg |
+| 尺寸／重量 | Φ120 × 94.3 mm；415 g |
+| 線長／材質 | 200 mm；PC |
+| 溫濕度 | −30°C～60°C；濕度小於 95%，無凝結 |
+| 防護欄位 | 原文為 Class A，沒有提供可確認的 IP 防水等級 |
+| 安裝圖 | 底部 3 個 Φ4.5 mm 孔、分布圓 Φ96.5 mm；其餘尺寸見第 7 頁 |
 
-The controller and servo retain their separate correctly rated supply. Do not
-connect two transmitters (Jetson and LilyGO) to the controller RX simultaneously.
-Servo is connected to M0; leave the controller in its documented manual-light
-state and do not turn its potentiometer while sending UART commands.
+紙本的 ±90° 不代表舊 GXServo 的 0–180° 命令映射；也不代表本雲台可接收指定角度或回報位置。
+紙本角速度不能直接換算成 Pelco-D 的 1–63 級，沒有量測前不作線性推估。
+Class A 不當作防水、鹽霧或戶外耐候驗收。完整掃描件來源見[說明書索引](hardware-manuals.md)。
 
-The installed system maps UART1 at 0x3100000 to `/dev/ttyTHS1`; its device-tree
-node reports `okay`. This is configuration evidence, not proof of pin output.
-The app service already belongs to `dialout`. No UART command has been sent
-as part of the read-only discovery.
+## 歷史 RS485 控制路徑
 
-The rear J14 header is the combined debug UART. The current kernel console and
-serial login both use ttyTCU0. This app rejects that device, its symlink aliases
-and active kernel consoles. Do not repurpose it by merely changing baud rate.
+```text
+Jetson Nano USB → Moxa UPort 1130（RS-485 2-wire）→ RS485 雲台 A／B
+獨立 12 V 電源 → RS485 雲台電源端
+```
 
-## Control boundary
+Moxa 使用 **R+／R−** 同時收發；**T+／T−留空，不與 R 端短接**。
+使用者改接 R 端後已確認可控制轉動。雲台 A／B 最終正負對應尚未記錄，
+換線前須停止並關閉雲台電源；不能只靠不同廠商的 A／B 字母推定極性。
+Nano GPIO、原生 UART、USB-TTL 不能直接接 A／B 或 12 V。
 
-`m0_pulse` sends `#00P0500!` through `#00P2500!`, no newline, at 9600 8N1.
-The 180-degree command mapping uses 90 degrees = `#00P1500!`. This is a
-configured pulse mapping, not an angle measurement. Verify the GXServo's
-centre, direction and mechanical endpoints on the installed assembly before
-full-range operation; the controller generates PWM, not the Jetson UART.
+當時使用 `ti_usb_3410_5052` 與既有 Moxa 韌體，優先固定 `/dev/serial/by-id/` 路徑，
+不依賴 `ttyUSB` 編號。Nano 核心缺少模組時的處理見[手動測試與驅動](pelco-d-test.md)。
+主追蹤程式已實作 Pelco-D 方向／速度輸出，手動控制整合於主設定頁。
+主程式負責兩種模式的串口交接，先關閉前一個持有者，再開啟下一個。這段 RS485 接入記錄不代表部署或實體驗收，見[架構](architecture.md)。
 
-There is no ACK, physical angle feedback or established controller command
-watchdog. STOP prevents new commands; the servo can still complete the last
-requested position and remains powered. The 250 ms target deadline is host
-software protection only. A frozen host cannot enforce an actuator-side stop.
-Opening the port, starting the service and re-ARM do not transmit a cached or
-home target. ARM with live tracking can request 90 degrees from an unknown
-physical position; start only after the installed centre has been confirmed.
+## 相機與螢幕
 
-References:
-- [NVIDIA UART1 / pins 8 and 10](https://forums.developer.nvidia.com/t/not-able-to-access-find-dev-ttyths0-on-jeton-orin-nano-devkit-nvidia-official-board/299789)
-- [NVIDIA combined debug UART](https://docs.nvidia.com/jetson/archives/r39.2/DeveloperGuide/AT/JetsonLinuxDevelopmentTools/TegraCombinedUART.html)
+專案相機仍以 Night Wolf YL-A85-800／MCA85_AF 的獨立 Ethernet／ONVIF／RTSP
+路徑規劃，見[相機管線](camera-pipeline.md)。2026-11-06 的 RS485 雲台測試未裝相機；
+該測試不能證明目前 PWM 的帶載跟拍，也不能證明鏡頭或光學變焦功能。
+
+使用者於 2026-10-31 確認實體螢幕為 **1024×600 橫向**，仍是主要 kiosk 設計尺寸。
+裝置使用 `?display=local&layout=nano`，1280×800 保留相容；詳見[UI 規格](ui.md)。
+螢幕吋數、DPI 與觸控能力尚未指定。

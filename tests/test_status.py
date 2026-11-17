@@ -8,6 +8,43 @@ def test_boot_is_disarmed_and_not_armable() -> None:
     assert snapshot["arm_allowed"] is False
 
 
+def test_old_run_cannot_republish_recognition_after_stop_or_restart():
+    status=StatusStore()
+    for name in ('camera','inference','servo'):status.update_component(name,'ready')
+    assert status.arm()[0]
+    run_id=status.inference_run()[0]
+    assert status.update_observations((),inference_run_id=run_id)
+    status.disarm('stop')
+    assert not status.update_observations((),inference_run_id=run_id)
+    assert not status.snapshot()['recognition']['available']
+    assert status.arm()[0]
+    assert not status.update_observations((),inference_run_id=run_id)
+
+
+def test_recognition_sequence_counts_results_not_status_or_preview_refreshes():
+    status = StatusStore()
+    for name in ('camera', 'inference', 'servo'):
+        status.update_component(name, 'ready')
+    assert status.snapshot()['recognition']['sequence'] is None
+    assert status.arm()[0]
+    run_id = status.inference_run()[0]
+    # An inference that finds nobody still completed a new model frame.
+    assert status.update_observations((), inference_run_id=run_id)
+    first = status.snapshot()['recognition']['sequence']
+    assert first == 1
+    for age in (0, 20, 40):
+        status.update_metrics(camera_frame_age_ms=age, inference_frame_age_ms=age)
+        assert status.snapshot()['recognition']['sequence'] == first
+    assert status.update_observations((), inference_run_id=run_id)
+    assert status.snapshot()['recognition']['sequence'] == first + 1
+    status.disarm('STOP')
+    assert status.snapshot()['recognition']['sequence'] is None
+    assert status.arm()[0]
+    assert not status.update_observations((), inference_run_id=run_id)
+    assert status.update_observations((), inference_run_id=status.inference_run()[0])
+    assert status.snapshot()['recognition']['sequence'] == first + 2
+
+
 def test_camera_and_inference_frame_ages_are_independent() -> None:
     status = StatusStore()
     status.update_metrics(camera_frame_age_ms=125)
@@ -113,3 +150,4 @@ def test_all_detection_boxes_and_thresholded_states_are_exposed_without_arm(monk
     assert status.snapshot()['recognition']['detections']==[]
     assert not status.snapshot()['recognition']['available']
     assert status.snapshot()['recognition']['valid_for_ms']==0
+    assert status.snapshot()['recognition']['sequence'] is None

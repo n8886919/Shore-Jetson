@@ -3,17 +3,28 @@
 html,body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
 .kiosk { position: absolute; top: 0; left: 0; width: 1280px; height: 800px; display: grid; grid-template-columns: 960px 320px; grid-template-rows: 720px 80px; grid-template-areas: "stage stage" "status status"; transform: scale(var(--kiosk-scale, 1)); transform-origin: top left; }
 .viewer { position: relative; min-height: 0; overflow: hidden; background: #000; }
-.viewer img { width: 100%; height: 100%; object-fit: contain; object-position: left top; display: block; }
+.viewer canvas { width: 100%; height: 100%; object-fit: contain; object-position: left top; display: block; }
 .bbox-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
 .bbox-overlay text { font: 11px system-ui, sans-serif; }
-.stream-notice { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 14px; padding-top: 70px; text-shadow: 0 1px 4px #000; pointer-events: none; }
+.tracking-zone-overlay { display: none; position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
+.tracking-zone-overlay rect { fill: none; }
+.tracking-zone-overlay path { fill: none; stroke: #b8e9d9; stroke-width: 1; stroke-opacity: .7; vector-effect: non-scaling-stroke; }
+.lens-buttons button svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.lens-buttons button { display: grid; place-items: center; }
+.stream-notice { color: #f8d493; font-size: 14px; overflow: hidden; text-overflow: ellipsis; }
 [hidden] { display: none !important; }
 .status-bar { height: 80px; display: grid; grid-template-columns: minmax(0,1fr) 176px 120px; align-items: center; gap: 12px; padding: 0 16px; background: #101d22; }
 .information { min-width: 0; display: flex; align-items: center; gap: 18px; white-space: nowrap; }
-#phase { font-size: 17px; font-weight: 650; color: #ecf7f5; }
 #liveInfo { display: flex; gap: 8px; }
-.status-chip { display: inline-flex; align-items: center; justify-content: center; min-height: 38px; padding: 7px 12px; border-radius: 6px; font-size: 16px; font-weight: 650; white-space: nowrap; }
-.status-chip.good { background: #174631; color: #bfffd9; }
+.status-chip { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; min-height: 57px; padding: 10.5px 18px; border-radius: 9px; font-size: 24px; font-weight: 650; white-space: nowrap; }
+.status-chip.good { background: #43ee86; color: #052e17; border: 1px solid #8bffb5; }
+.status-chip.good::before { content: ''; flex-shrink: 0; width: 12px; height: 12px; border-radius: 50%; margin-right: 10.5px; background: #07562b; }
+.inference-lamp { flex-shrink: 0; visibility: hidden; }
+.status-chip.inference-lamp::before { content: none; }
+.inference-dot { flex-shrink: 0; width: 12px; height: 12px; margin-right: 10.5px; border-radius: 50%; background: #07562b; opacity: 0; }
+.phase-searching { background: #913443; color: #fff; }
+.phase-chasing { background: #f0c75e; color: #302306; }
+.phase-qualified { background: #1f6f43; color: #fff; }
 .status-chip.warning { background: #674711; color: #fff0bd; }
 .status-chip.bad { background: #712b35; color: #fff1f2; }
 .status-chip.recording { background: #a0263a; color: #fff; }
@@ -26,15 +37,12 @@ button.stop { color: #ffecee; background: #421c22; border-color: #ff5e62; }
 .control-link svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 button:focus-visible,a:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
 .no-signal { position: absolute; inset: 0; background: linear-gradient(to right,#bdbdbd 0 14.2857%,#bfbf00 14.2857% 28.5714%,#00bfbf 28.5714% 42.8571%,#00bf00 42.8571% 57.1429%,#bf00bf 57.1429% 71.4286%,#bf0000 71.4286% 85.7143%,#0000bf 85.7143%) top / 100% 75% no-repeat,linear-gradient(to right,#002b49 0 18%,#eee 18% 36%,#310047 36% 54%,#111 54% 72%,#050505 72% 81%,#161616 81% 90%,#242424 90%) bottom / 100% 25% no-repeat; background-color: #111; }
-.no-signal::before { content: 'NO SIGNAL'; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); padding: 8px 14px; background: #111; color: #eee; font: 700 16px monospace; letter-spacing: .14em; }
+.no-signal::before { content: ''; }
 .no-signal::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(transparent 0 2px,rgba(0,0,0,.12) 2px 3px); }
 
-.stage { grid-area: stage; min-width: 0; min-height: 0; display: grid; grid-template-rows: 720px; }
-.kiosk.controls-open { grid-template-areas: "stage panel" "status status"; }
-.controls-open .stage { grid-template-rows: 540px 180px; }
-.controls-open .viewer { width: 960px; height: 540px; }
+.stage { grid-area: stage; min-width: 0; min-height: 0; position: relative; display: block; background: #000; }
 .status-bar { grid-area: status; width: 1280px; }
-.controls-panel { grid-area: panel; min-height: 0; min-width: 0; overflow-y: auto; background: #101d22; border-left: 1px solid #284047; padding: 14px 16px; }
+.controls-panel { min-height: 0; min-width: 0; overflow-y: auto; padding: 14px 16px; }
 .controls-panel header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .controls-panel h1 { font-size: 22px; margin: 0; }
 .controls-panel h2 { font-size: 16px; margin: 0 0 10px; }
@@ -69,3 +77,157 @@ button:focus-visible,a:focus-visible { outline: 2px solid var(--cyan); outline-o
 .diagnostic-content dd { margin: 0; }
 
 .control-link.active { color: var(--cyan); border-color: var(--cyan); background: #123c38; }
+
+/* 1024 x 600 mouse-operated Nano display. */
+.kiosk.nano-layout { width: 1024px; height: 600px; grid-template-columns: 768px 256px; grid-template-rows: 544px 56px; }
+.nano-layout .status-bar { width: 1024px; height: 56px; grid-template-columns: minmax(0,1fr) 144px 100px; gap: 8px; padding: 0 12px; }
+.nano-layout .status-bar button,.nano-layout .control-link { min-height: 40px; font-size: 16px; }
+.nano-layout .information { gap: 10px; }
+.nano-layout .status-chip { font-size: 21px; min-height: 48px; padding: 7.5px 12px; }
+.nano-layout .controls-panel { padding: 10px 12px; }
+.nano-layout .controls-panel h1 { font-size: 19px; }
+.nano-layout .controls-panel h2 { margin-bottom: 8px; }
+.nano-layout .control-readout { padding: 8px 12px; }
+.nano-layout .controls-panel header { margin-bottom: 6px; }
+.nano-layout .panel-section + .panel-section { margin-top: 6px; padding-top: 6px; }
+.nano-layout .lens-buttons button { min-height: 40px; }
+.nano-layout .tuning-panel input { height: 22px; }
+
+/* Field monitor: a quiet image area, strong status contrast, mouse/keyboard controls. */
+:root { --cyan: #6de6cd; background: #0d141a; color: #eef3f6; --muted: #a7b5bf; }
+.status-bar { background: #15212b; border-top: 1px solid #344754; }
+.information { gap: 10px; overflow: hidden; }
+#phase { overflow: hidden; text-overflow: ellipsis; }
+.controls-panel { background: #15212b; }
+.panel-section + .panel-section { border-color: #344754; }
+.control-readout { background: #101b24; }
+button.stop { color: #fff; background: #913443; border-color: #ff9aa7; }
+.control-link { background: #243440; color: #eef3f6; }
+.control-link.active { background: #264840; color: #b6ffe3; }
+button:hover:not(:disabled) { filter: brightness(1.13); }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+
+/* Compact operator controls: values and actions, with no explanatory notes. */
+.readout-metrics { gap: 12px 24px; font-size: 16px; align-items: center; }
+.readout-metrics b { font-size: 21px; margin-left: 5px; }
+.control-readout { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.reconnect-button { min-height: 44px; padding: 0 16px; font-size: 16px; color: #eef3f6; background: #243440; }
+.tuning-panel label { font-size: 16px; margin-top: 8px; }
+.tuning-panel output { font-size: 18px; }
+.operator-issue { font-size: 16px; }
+.nano-layout .readout-metrics { gap: 10px 20px; }
+.nano-layout .readout-metrics b { font-size: 20px; }
+
+/* The collapsed black rail and gear travel as part of the same drawer. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.kiosk { --rail-width: 64px; --drawer-width: 320px; --drawer-motion: .1s cubic-bezier(.2,.8,.2,1); overflow: hidden; background: #000; }
+.kiosk.nano-layout { --drawer-width: 256px; }
+.viewer { width: 960px; height: 540px; transition: width var(--drawer-motion), height var(--drawer-motion); }
+.nano-layout.controls-open .viewer { width: 768px; height: 432px; }
+.controls-drawer { position: absolute; z-index: 4; inset: 0 0 0 auto; width: var(--drawer-width); overflow: hidden; background: #000; transform: translateX(calc(var(--drawer-width) - var(--rail-width))); transition: transform var(--drawer-motion); }
+.controls-open .controls-drawer { transform: translateX(0); }
+.control-rail { position: absolute; top: 44px; left: 0; width: var(--rail-width); display: flex; justify-content: center; z-index: 5; transform: translateY(78px); transition: transform var(--drawer-motion); }
+.controls-open .control-rail { transform: translateY(0); }
+.control-toggle, .nano-layout .control-toggle { width: 50px; height: 50px; min-height: 50px; border-radius: 12px; background: #182a33; border: 1px solid #43616c; color: #d8fff3; box-shadow: 0 10px 30px #0008; transition: background .1s, border-color .1s; }
+.control-toggle svg { width: 26px; height: 26px; stroke-width: 1.7; }
+.control-toggle.active { background: #28574a; border-color: #8dffcf; }
+.controls-panel, .nano-layout .controls-panel { position: relative; width: 100%; height: 100%; padding: 10px 14px; border: 0; background: transparent; visibility: hidden; pointer-events: none; opacity: 0; transition: opacity .1s, visibility .1s; }
+.controls-panel header, .nano-layout .controls-panel header { min-height: 28px; padding: 0; margin-bottom: 8px; flex-direction: column; align-items: flex-start; justify-content: center; }
+.controls-open .controls-panel { opacity: 1; visibility: visible; pointer-events: auto; }
+.status-bar, .nano-layout .status-bar { width: 960px; grid-template-columns: minmax(0,1fr) 176px; transition: width var(--drawer-motion); }
+.controls-open .status-bar { width: calc(100% - var(--drawer-width)); }
+.nano-layout .status-bar { grid-template-columns: minmax(0,1fr) 144px; }
+.controls-panel .control-readout, .nano-layout .control-readout { display: grid; gap: 6px; padding: 8px 0 0; background: transparent; }
+.controls-panel .readout-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; font-size: 14px; }
+.controls-panel .readout-metrics span { display: block; line-height: 1.5; }
+.controls-panel .readout-metrics b { margin-left: 4px; font-size: 18px; }
+.controls-panel .reconnect-button { width: 100%; }
+.window-actions { position: absolute; z-index: 6; top: 6px; right: 7px; display: flex; flex-direction: column; gap: 8px; }
+.window-action, .nano-layout .window-action { display: grid; place-items: center; width: 50px; height: 50px; min-height: 50px; padding: 0; border: 1px solid #43616c; border-radius: 12px; background: #182a33; color: #eef3f6; }
+.window-action svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.window-close:hover { background: #913443; }
+#windowScaleToggle:hover { background: #28574a; border-color: #8dffcf; }
+.window-action .restore-icon, .half-size .window-action .shrink-icon { display: none; }
+.half-size .window-action .restore-icon { display: block; }
+@media (prefers-reduced-motion: reduce) { .controls-drawer, .control-rail, .viewer, .controls-panel, .nano-layout .controls-panel, .status-bar { transition: none; } }
+
+.tuning-panel label.switch-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 36px; }
+.ios-switch { position: relative; display: inline-block; flex: 0 0 50px; width: 50px; height: 30px; }
+.ios-switch input[type="checkbox"] { position: absolute; inset: 0; z-index: 1; width: 50px; height: 30px; margin: 0; opacity: 0; cursor: pointer; }
+.switch-track { display: block; width: 50px; height: 30px; border-radius: 15px; background: #4b4f54; transition: background .1s ease; }
+.switch-track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0004; transition: transform .1s ease; }
+.ios-switch input:checked + .switch-track { background: #34c759; }
+.ios-switch input:checked + .switch-track::after { transform: translateX(20px); }
+.ios-switch input:focus-visible + .switch-track { outline: 2px solid #b8e9d9; outline-offset: 3px; }
+.ios-switch input:disabled { cursor: default; }
+.ios-switch input:disabled + .switch-track { opacity: .45; }
+@media (prefers-reduced-motion: reduce) { .switch-track, .switch-track::after { transition: none; } }
+
+.recording-badge.not-recording { background: #913443; color: #fff; }
+.recording-badge.is-recording { background: #1f6f43; color: #fff; border: 1px solid #75dea1; }
+.recording-badge.is-recording::before { content: ''; flex-shrink: 0; width: 12px; height: 12px; margin-right: 10.5px; border-radius: 50%; background: #ff434e; animation: recording-blink 1s steps(1,end) infinite; }
+@keyframes recording-blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .recording-badge.is-recording::before { animation: none; opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .inference-dot { opacity: 1; } }
+
+/* Manual head control stays inside the scrolling settings drawer. */
+.pan-tilt-actions { display: flex; gap: 8px; }
+.pan-tilt-actions button { flex: 1; min-width: 0; min-height: 36px; padding: 0 6px; font-size: 13px; color: #b5fff2; background: #163b39; }
+.pan-tilt-speed { display: grid; grid-template-columns: 1fr auto; gap: 4px; margin: 10px 0 6px; font-size: 13px; }
+.pan-tilt-speed output { color: #b8e9d9; font-variant-numeric: tabular-nums; }
+.pan-tilt-speed input { grid-column: 1 / -1; width: 100%; height: 24px; margin: 0; accent-color: #27dfcb; }
+.pan-tilt-pad { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 36px); gap: 4px; }
+.pan-tilt-pad button { min-height: 0; padding: 0; font-size: 22px; color: #d0e1e3; background: #192e34; touch-action: none; user-select: none; }
+.pan-tilt-pad [data-pan-tilt-direction="up"] { grid-area: 1 / 2; }
+.pan-tilt-pad [data-pan-tilt-direction="left"] { grid-area: 2 / 1; }
+.pan-tilt-pad [data-pan-tilt-direction="right"] { grid-area: 2 / 3; }
+.pan-tilt-pad [data-pan-tilt-direction="down"] { grid-area: 3 / 2; }
+.pan-tilt-pad .pan-tilt-stop { grid-area: 2 / 2; font-size: 14px; color: #ffecee; background: #421c22; border-color: #ff5e62; }
+.pan-tilt-pad button.active { color: #05211e; background: #27dfcb; }
+.pan-tilt-hint,.pan-tilt-state { margin: 6px 0 0; font-size: 12px; line-height: 1.5; color: #adc1c5; overflow-wrap: anywhere; }
+.pan-tilt-state.fault { color: #ffc879; }
+#servoTestButton { white-space: pre-line; line-height: 1.4; }
+#servoTestButton.testing { background: #712b35; color: #fff; border-color: #ad5965; }
+.servo-test-state { margin: 8px 0 0; color: #e8eeec; font-size: 14px; line-height: 1.4; }
+
+/* Native screen has its own frame transport; this video is LAN WebRTC only. */
+#rtcStream { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+
+/* Settings live in the footer; the closed drawer reserves no image space. */
+.controls-drawer { bottom: 80px; transform: translateX(100%); }
+.nano-layout .controls-drawer { bottom: 56px; }
+.control-rail, .controls-open .control-rail { position: static; width: auto; transform: none; }
+.control-toggle, .nano-layout .control-toggle { height: 44px; min-height: 44px; }
+.status-bar, .nano-layout .status-bar, .controls-open .status-bar { width: 100%; grid-template-columns: minmax(0,1fr) 144px 50px; }
+.kiosk:not(.controls-open) .viewer { width: 100%; }
+
+/* Remote Web uses the viewport directly, including old links with layout=nano. */
+.kiosk.responsive-layout { position: fixed; inset: 0; width: 100%; height: var(--viewport-height); transform: none; grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,1fr) 64px; --viewport-height: 100vh; --drawer-width: min(360px,86vw); --content-width: 100vw; --status-height: 64px; }
+@supports (height: 100dvh) {
+  .kiosk.responsive-layout { --viewport-height: 100dvh; }
+}
+.responsive-layout.controls-open { --content-width: calc(100vw - var(--drawer-width)); }
+.responsive-layout .stage { width: var(--content-width); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.responsive-layout .viewer, .responsive-layout.controls-open .viewer, .kiosk.responsive-layout:not(.controls-open) .viewer { width: min(var(--content-width),calc((var(--viewport-height) - var(--status-height))*16/9)); height: min(calc(var(--content-width)*9/16),calc(var(--viewport-height) - var(--status-height))); transition: none; }
+.responsive-layout .controls-drawer { bottom: var(--status-height); }
+.responsive-layout .status-bar { position: relative; z-index: 5; width: 100%; height: var(--status-height); gap: 8px; padding: 0 12px; }
+.responsive-layout .status-chip { font-size: clamp(14px,1.7vw,21px); min-height: 40px; padding: 7px 10px; }
+.responsive-layout .information { gap: 6px; }
+.responsive-layout .arm { min-height: 44px; font-size: 18px; }
+@media (max-width: 700px) {
+  .responsive-layout.controls-open { --content-width: 100vw; }
+  .responsive-layout .status-bar { grid-template-columns: minmax(0,1fr) 110px 44px; padding: 0 6px; gap: 5px; }
+  .responsive-layout .information { flex-wrap: wrap; gap: 3px; }
+  .responsive-layout .status-chip { font-size: 12px; min-height: 26px; padding: 4px 6px; }
+  .responsive-layout #liveInfo { gap: 4px; }
+  .responsive-layout .control-toggle { width: 44px; }
+  .responsive-layout .arm { font-size: 16px; }
+}
+
+/* Live information is the final settings section; footer controls stay reachable. */
+.status-bar > .arm { grid-column: 2; }
+.status-bar > .control-rail { grid-column: 3; }
+.controls-panel .live-information .information { flex-wrap: wrap; align-items: flex-start; gap: 8px; white-space: normal; }
+.controls-panel .live-information #liveInfo { flex-wrap: wrap; max-width: 100%; }
+.live-information .status-chip { min-height: 34px; padding: 6px 10px; font-size: 14px; }
+.live-information .stream-notice { white-space: normal; }

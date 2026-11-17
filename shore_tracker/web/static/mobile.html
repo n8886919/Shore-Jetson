@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Shore Tracker · 手機網頁</title>
+  <title>Shore Jetson · 手機網頁</title>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -45,10 +45,9 @@
         <div id="liveInfo" class="status-line" tabindex="0" aria-label="即時狀態">等待狀態</div>
         <div class="action-row">
           <button id="armButton" class="arm" disabled>開始追蹤</button>
-          <button id="recordButton" class="record-icon" aria-label="開始手動錄影" title="開始手動錄影" aria-pressed="false" disabled>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle class="record-ring" cx="12" cy="12" r="9"/><circle class="record-dot" cx="12" cy="12" r="6"/><rect class="record-stop" x="7" y="7" width="10" height="10" rx="1"/></svg>
-          </button>
+
         </div>
+        <label class="switch-row recording-mode"><span>連續錄影</span><span class="ios-switch"><input id="continuousRecording" type="checkbox" role="switch" aria-label="連續錄影" disabled><span class="switch-track" aria-hidden="true"></span></span></label>
         <p id="recordStatus" role="status">讀取錄影狀態</p>
         <p id="armReason">等待相機、辨識與 UART 串口</p>
       </section>
@@ -59,7 +58,7 @@
           <span>servo角度</span><input id="servoAngleSlider" type="range" min="0" max="180" step="0.1" value="90" data-available="false" disabled aria-label="servo角度" aria-valuetext="尚無角度資料"><output id="servoTargetAngle">—</output>
         </label>
         <label>P gain <input id="panGain" type="range" min="1" max="120" step="1"><output id="panGainValue"></output></label>
-        <label title="畫面中心的容許偏差；Servo 角度死區由 Shore-Spotter 設定">畫面死區 <input id="deadband" type="range" min="0" max="0.2" step="0.01"><output id="deadbandValue"></output></label>
+        <label title="畫面中心的容許偏差；Servo 由本機控制器設定">跟拍容許區 <input id="deadband" type="range" min="0.05" max="0.4" step="0.005" value="0.20"><output id="deadbandValue">40%</output></label>
         <label title="預覽數位放大上限">Max zoom <input id="zoomMax" type="range" min="1" max="4" step="0.1"><output id="zoomMaxValue"></output></label>
       </section>
       <section class="card log-card" aria-label="狀態與紀錄">

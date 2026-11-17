@@ -9,7 +9,7 @@ chmod 700 "$web_state"
 web_socket="$web_state/web-18091.sock"
 if ! ssh -S "$web_socket" -O check "$jetson_target" >/dev/null 2>&1; then
   ssh -M -S "$web_socket" -fNT \
-    -L 127.0.0.1:18091:127.0.0.1:8090 \
+    -L 127.0.0.1:18091:127.0.0.1:80 \
     -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
     -o ServerAliveCountMax=2 -o ConnectTimeout=5 \
     -o StrictHostKeyChecking=yes "$jetson_target"

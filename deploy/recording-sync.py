@@ -46,7 +46,7 @@ def main():
                         except OSError:
                             print('錄影 tunnel port 已被使用，停止接收。', flush=True)
                             return 1
-                    tunnel = subprocess.Popen(['ssh', '-N', '-T', '-L', f'127.0.0.1:{args.port}:127.0.0.1:8090',
+                    tunnel = subprocess.Popen(['ssh', '-N', '-T', '-L', f'127.0.0.1:{args.port}:127.0.0.1:80',
                         '-o', 'ExitOnForwardFailure=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
                         '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2',
                         '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=' + args.known_hosts,

@@ -20,11 +20,9 @@ h2 { font-size: 18px; margin: 0 0 16px; font-weight: 600; }
 .metrics { display: flex; gap: 44px; padding: 14px 0; margin: 15px 0 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .metrics span { display: block; color: var(--muted); font-size: 11px; margin-bottom: 5px; }
 .metrics strong { font-size: 23px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.reconnect { display: flex; align-items: center; gap: 14px; }
 button { min-height: 44px; flex-shrink: 0; padding: 0 17px; border: 1px solid var(--cyan); border-radius: 7px; background: #123c38; color: var(--cyan); font-weight: 650; font-size: 13px; cursor: pointer; }
 button:disabled { color: #789297; border-color: #385158; background: #192a30; cursor: not-allowed; }
 button:focus-visible, a:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
-.reconnect p { margin: 0; font-size: 12px; color: var(--muted); }
 .note { color: #829da2; font-size: 12px; line-height: 1.65; margin: 14px 0 0; }
 #commandResult { font-size: 12px; color: var(--cyan); margin: 10px 0 0; }
 #commandResult:empty { display: none; }
@@ -35,7 +33,7 @@ dl > div:last-child { border-bottom: 0; }
 dt { color: var(--muted); }
 dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 footer { display: flex; justify-content: space-between; color: #6e8a90; font-size: 11px; margin-top: 15px; }
-@media(max-width: 800px) { main { padding: 18px; } .grid { grid-template-columns: 1fr; } .reconnect { flex-wrap: wrap; } .metrics { gap: 30px; } }
+@media(max-width: 800px) { main { padding: 18px; } .grid { grid-template-columns: 1fr; } .metrics { gap: 30px; } }
 
 /* Kiosk control surface: all everyday controls fit the 1280 x 800 screen. */
 main { max-width: 1280px; padding: 16px 24px 12px; }
@@ -88,3 +86,15 @@ button.stop-control { min-height: 44px; background: #421c22; color: #ffecee; bor
 
 .operator-issue { margin: 0 0 16px; padding: 12px 16px; border-radius: 6px; background: #674711; color: #fff0bd; font-size: 16px; line-height: 1.6; white-space: pre-line; }
 [hidden] { display: none !important; }
+
+.tuning-panel label.switch-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 36px; }
+.ios-switch { position: relative; display: inline-block; flex: 0 0 50px; width: 50px; height: 30px; }
+.ios-switch input[type="checkbox"] { position: absolute; inset: 0; z-index: 1; width: 50px; height: 30px; margin: 0; opacity: 0; cursor: pointer; }
+.switch-track { display: block; width: 50px; height: 30px; border-radius: 15px; background: #4b4f54; transition: background .1s ease; }
+.switch-track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0004; transition: transform .1s ease; }
+.ios-switch input:checked + .switch-track { background: #34c759; }
+.ios-switch input:checked + .switch-track::after { transform: translateX(20px); }
+.ios-switch input:focus-visible + .switch-track { outline: 2px solid #b8e9d9; outline-offset: 3px; }
+.ios-switch input:disabled { cursor: default; }
+.ios-switch input:disabled + .switch-track { opacity: .45; }
+@media (prefers-reduced-motion: reduce) { .switch-track, .switch-track::after { transition: none; } }

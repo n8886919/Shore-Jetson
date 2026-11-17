@@ -23,7 +23,7 @@ if [ -f "$pid_file" ] && [ ! -L "$pid_file" ]; then
         case "$command_line" in
             *shore_tracker*jetson-staging-live.toml*) ;;
             *)
-                echo "staging PID does not belong to Shore Tracker" >&2
+                echo "staging PID does not belong to Shore Jetson" >&2
                 exit 1
                 ;;
         esac

@@ -18,6 +18,7 @@ let cameraPending = 0;
 let cameraState = null;
 let recordingState = "unavailable";
 let recordingPending = false;
+let continuousRecordingEnabled = false;
 let manualRecordingRequested = false;
 let offlinePreview = true;
 let tuningReady = false;
@@ -93,7 +94,9 @@ async function post(path, payload = {}) {
 
 function showTuning() {
   $('panGainValue').textContent = Number($('panGain').value).toFixed(0);
-  $('deadbandValue').textContent = Number($('deadband').value).toFixed(2);
+  const tolerance = `${Math.round(Number($('deadband').value)*200)}%`;
+  $('deadbandValue').textContent = tolerance;
+  $('deadband').setAttribute('aria-valuetext',tolerance);
   $('zoomMaxValue').textContent = `${Number($('zoomMax').value).toFixed(1)}×`;
 }
 
@@ -105,13 +108,10 @@ function render(data) {
   const recordingActive = ['starting', 'recording'].includes(recordingState);
   manualRecordingRequested = recording.manual_requested ?? recordingActive;
   const automaticRecording = recording.tracking_requested === true;
-  const recordLabel = manualRecordingRequested ? '結束手動錄影' : recordingState === 'finalizing' ? '正在完成影片' : '開始手動錄影';
-  $('recordButton').title = recordLabel;
-  $('recordButton').setAttribute('aria-label', recordLabel);
-  $('recordButton').setAttribute('aria-pressed', String(manualRecordingRequested));
-  $('recordButton').classList.toggle('recording-active', manualRecordingRequested);
-  $('recordButton').disabled = offlinePreview || recordingPending || (recordingState === 'unavailable' || (recordingState === 'finalizing' && !manualRecordingRequested)) || (!manualRecordingRequested && data.components.camera.state !== 'ready');
-  $('recordStatus').textContent = (automaticRecording ? (recording.tracking_qualified ? '自動跟拍' : '追浪試拍') + (manualRecordingRequested ? '＋手動' : '') + ' · ' : manualRecordingRequested ? '手動 · ' : '') + (recording.detail || '') + (recordingActive ? ` · ${recording.elapsed_seconds || 0} 秒` : '');
+  continuousRecordingEnabled = recording.continuous_enabled === true;
+  if (!recordingPending) $('continuousRecording').checked = continuousRecordingEnabled;
+  $('continuousRecording').disabled = offlinePreview || recordingPending || typeof recording.continuous_enabled !== 'boolean';
+  $('recordStatus').textContent = (recording.continuous_requested ? '連續錄影 · ' : automaticRecording ? (recording.tracking_qualified ? '自動跟拍' : '追浪試拍') + ' · ' : manualRecordingRequested ? '手動 · ' : '') + (recording.detail || '') + (recordingActive ? ` · ${recording.elapsed_seconds || 0} 秒` : '');
   const tracking = data.tracking;
   const metrics = data.metrics;
   cameraArmed = tracking.armed || tracking.mode === 'arming';
@@ -124,7 +124,7 @@ function render(data) {
   $('armButton').textContent = tracking.mode === 'arming' ? '取消啟動' : trackingActive ? '停止追蹤' : '開始追蹤';
   $('armButton').className = trackingActive ? 'stop' : 'arm';
   $('armButton').disabled = offlinePreview || trackingPending || (!trackingActive && !data.arm_allowed);
-  $('armButton').title = trackingActive ? '停止傳送新目標，不切斷 Servo 電源' : '開始追蹤';
+  $('armButton').title = trackingActive ? (data.servo_command?.protocol === 'pelco_d' ? '送出雲台停止指令，不切斷電源' : '停止傳送新目標，不切斷 Servo 電源') : '開始追蹤';
   $('armReason').textContent = tracking.armed ? tracking.reason : data.arm_reason;
   $('armReason').hidden = data.offline_preview === true;
   $('phase').textContent = phaseNames[tracking.mode] || tracking.mode;
@@ -195,7 +195,7 @@ async function refresh() {
     streamNeedsReconnect = true;
     cameraArmed = true;
     updateCameraButtons();
-    $('recordButton').disabled = true;
+    $('continuousRecording').disabled = true;
     updateDetections(null, false, 1, .5);
     $('noSignal').hidden = false;
     $('stream').style.visibility = 'hidden';
@@ -217,7 +217,6 @@ async function refresh() {
 $('armButton').addEventListener('click', async () => {
   if (trackingPending || offlinePreview) return;
   const stop = !trackingKnown || trackingActive;
-  if (!stop && !window.confirm('請確認 UART 控制接線、Servo 中位與方向已驗證，並確認 Servo 與相機周圍淨空。開始追蹤？')) return;
   trackingPending = true;
   $('armButton').disabled = true;
   try { await post(stop ? '/api/stop' : '/api/arm'); }
@@ -255,7 +254,7 @@ async function applyTuning() {
         if (!Object.entries(values).every(([key, value]) => data.tuning?.[key] === value)) {
           throw new Error('讀回的設定不同，請重新套用');
         }
-        appendLog(`設定已生效 P:${values.pan_gain_deg} Deadband:${values.pan_deadband.toFixed(2)} Zoom:${values.zoom_maximum.toFixed(1)}×`);
+        appendLog(`設定已生效 P:${values.pan_gain_deg} 容許區:${Math.round(values.pan_deadband*200)}% Zoom:${values.zoom_maximum.toFixed(1)}×`);
         render(data);
       } catch (error) {
         appendLog(error.name === 'TimeoutError' || error.name === 'TypeError'
@@ -326,20 +325,23 @@ for (const button of document.querySelectorAll('[data-camera-action]')) {
   button.addEventListener('click', () => cameraCommand(button.dataset.cameraAction));
 }
 
-$('recordButton').addEventListener('click', async () => {
-  if (recordingPending) return;
+$('continuousRecording').addEventListener('change', async () => {
+  if (offlinePreview || recordingPending) return;
+  const enabled = $('continuousRecording').checked;
   recordingPending = true;
-  $('recordButton').disabled = true;
+  $('continuousRecording').disabled = true;
   try {
-    const response = await fetch('/api/recording', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: manualRecordingRequested ? 'stop' : 'start'})});
-    const data = await response.json();
-    appendLog(`手動錄影：${data.ok ? '指令已接受' : data.detail || '指令未完成'}`);
-    if (!data.ok) $('recordStatus').textContent = data.detail || '錄影指令未完成';
-  } catch (_) {
-    $('recordStatus').textContent = '連線中斷，恢復後會重新讀取錄影狀態';
-    appendLog($('recordStatus').textContent);
-  }
-  finally { recordingPending = false; }
+    const response = await fetch('/api/recording/mode', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({continuous:enabled})});
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.detail || '錄影設定未套用');
+    const check = await fetch('/api/status',{cache:'no-store'});
+    if (!check.ok) throw new Error('無法確認錄影設定');
+    const status = await check.json();
+    if (status.manual_recording?.continuous_enabled !== enabled) throw new Error('錄影設定讀回不一致');
+    continuousRecordingEnabled = enabled;
+    appendLog('連續錄影：'+(enabled ? '開啟' : '關閉'));
+  } catch (error) { $('recordStatus').textContent = error.message || '錄影設定未確認'; }
+  finally { recordingPending = false; $('continuousRecording').checked = continuousRecordingEnabled; }
   await refresh();
 });
 

@@ -42,12 +42,18 @@ class StatusStore:
         self._observations: tuple = ()
         self._observations_received = False
         self._observations_at: float | None = None
+        self._observation_sequence = 0
         self._recognition_thresholds = {'detection': .5, 'chasing_wave': .7, 'takeoff': .65, 'surfing': .7}
         self._recognition_stale_seconds = 1.5
         self._free_gib: float | None = None
         self._camera_frame_age_ms: int | None = None
         self._inference_frame_age_ms: int | None = None
         self._servo_angle_deg: float | None = None
+        self._tilt_angle_deg: float | None = None
+        self._servo_command = {"protocol": None, "pan_speed": None, "tilt_speed": None,
+                               "position_feedback": False}
+        self._tilt_enabled = False
+        self._tilt_available = False
         self._disk_pressure = "unknown"
         self._zoom_scale = 1.0
         self._zoom_center_x = 0.5
@@ -55,10 +61,12 @@ class StatusStore:
         self._inference_fps: float | None = None
         self._last_recording: str | None = None
         self._pan_gain_deg = 45.0
-        self._pan_deadband = 0.04
+        self._pan_deadband = 0.20
         self._pan_direction = 1
         self._zoom_maximum = 2.5
         self._disarm_listeners: list[Callable[[str], None]] = []
+        self._run_id = 0
+        self._run_started = 0.0
 
     def add_disarm_listener(self, callback: Callable[[str], None]) -> None:
         """Register a fail-safe callback without invoking it for boot DISARM."""
@@ -81,7 +89,7 @@ class StatusStore:
             )
             if (
                 name in {"camera", "inference", "servo"}
-                and state != "ready"
+                and state != "ready" and not (name == "inference" and state == "idle")
             ):
                 notify = self._disarm_locked(reason)
         if notify:
@@ -94,6 +102,7 @@ class StatusStore:
         camera_frame_age_ms: int | None = None,
         inference_frame_age_ms: int | None = None,
         servo_angle_deg: float | None = None,
+        tilt_angle_deg: float | None = None,
         disk_pressure: str | None = None,
         zoom_scale: float | None = None,
         zoom_center_x: float | None = None,
@@ -110,6 +119,8 @@ class StatusStore:
                 self._inference_frame_age_ms = inference_frame_age_ms
             if servo_angle_deg is not None:
                 self._servo_angle_deg = servo_angle_deg
+            if tilt_angle_deg is not None:
+                self._tilt_angle_deg = tilt_angle_deg
             if disk_pressure is not None:
                 self._disk_pressure = disk_pressure
             if zoom_scale is not None:
@@ -123,12 +134,27 @@ class StatusStore:
             if last_recording is not None:
                 self._last_recording = last_recording
 
-    def update_observations(self, observations) -> None:
+    def update_observations(self, observations, *, inference_run_id=None) -> bool:
         """Publish immutable model outputs independently of ARM/target selection."""
         with self._lock:
+            if inference_run_id is not None and (not self._tracking.armed or inference_run_id != self._run_id):
+                return False
             self._observations = tuple(observations)
             self._observations_received = True
             self._observations_at = time.monotonic()
+            self._observation_sequence += 1
+            return True
+
+    def update_servo_command(self, *, protocol: str, pan: int | None, tilt: int | None,
+                             run_id: int | None = None) -> None:
+        """Requested protocol levels; these are never measured motion or angles."""
+        with self._lock:
+            if run_id is not None and (not self._tracking.armed or self._run_id != run_id):
+                return
+            self._servo_command = {"protocol": protocol, "pan_speed": pan, "tilt_speed": tilt,
+                                   "position_feedback": False}
+            if protocol == "pelco_d":
+                self._servo_angle_deg = self._tilt_angle_deg = None
 
     def configure_recognition(self, *, detection=None, chasing_wave=None, takeoff=None, surfing=None, stale_seconds=None):
         values = {k: v for k, v in dict(detection=detection, chasing_wave=chasing_wave, takeoff=takeoff, surfing=surfing).items() if v is not None}
@@ -153,6 +179,7 @@ class StatusStore:
             selected = max(items, key=lambda item: (item.detection.confidence, -item.track_id), default=None)
         return {
             "available": available,
+            "sequence": self._observation_sequence if available else None,
             "valid_for_ms": max(0, round((self._recognition_stale_seconds - age) * 1000)) if available else 0,
             "detections": [
                 {"track_id": item.track_id, "box": asdict(item.detection.box),
@@ -198,12 +225,18 @@ class StatusStore:
         pan_deadband: float,
         pan_direction: int,
         zoom_maximum: float,
+        tilt_enabled: bool | None = None,
+        tilt_available: bool | None = None,
     ) -> None:
         with self._lock:
             self._pan_gain_deg = pan_gain_deg
             self._pan_deadband = pan_deadband
             self._pan_direction = pan_direction
             self._zoom_maximum = zoom_maximum
+            if tilt_enabled is not None:
+                self._tilt_enabled = tilt_enabled
+            if tilt_available is not None:
+                self._tilt_available = tilt_available
 
     def can_arm(self) -> tuple[bool, str]:
         with self._lock:
@@ -215,7 +248,7 @@ class StatusStore:
             blocked = [
                 f"{name}={self._components[name].state}"
                 for name in required
-                if self._components[name].state != "ready"
+                if self._components[name].state not in ({"ready", "idle"} if name == "inference" else {"ready"})
             ]
             if blocked:
                 return False, ", ".join(blocked)
@@ -245,12 +278,18 @@ class StatusStore:
             if self._tracking.mode != "arming":
                 return
             self._tracking.armed = True
+            self._run_id += 1
+            self._run_started = time.monotonic()
             self._tracking.mode = "searching"
             self._tracking.reason = reason
 
     def arm_request_active(self) -> bool:
         with self._lock:
             return self._tracking.mode == "arming" and not self._tracking.armed
+
+    def inference_run(self):
+        with self._lock:
+            return (self._run_id, self._run_started) if self._tracking.armed else None
 
     def disarm(self, reason: str) -> None:
         notify = False
@@ -265,6 +304,10 @@ class StatusStore:
         self._tracking.mode = "disarmed"
         self._tracking.target_track_id = None
         self._tracking.reason = reason
+        self._observations = ()
+        self._observations_received = False
+        self._observations_at = None
+        self._inference_fps = 0.0
         return changed
 
     def _notify_disarm(self, reason: str) -> None:
@@ -288,6 +331,8 @@ class StatusStore:
                     name: asdict(value) for name, value in self._components.items()
                 },
                 "tracking": asdict(self._tracking),
+                "servo_command": dict(self._servo_command),
+                "inference_run_id": self._run_id if self._tracking.armed else None,
                 "recognition": self._recognition_snapshot(),
                 "arm_allowed": allowed,
                 "arm_reason": arm_reason,
@@ -296,6 +341,7 @@ class StatusStore:
                     "camera_frame_age_ms": self._camera_frame_age_ms,
                     "inference_frame_age_ms": self._inference_frame_age_ms,
                     "servo_angle_deg": self._servo_angle_deg,
+                    "tilt_angle_deg": self._tilt_angle_deg,
                     "disk_pressure": self._disk_pressure,
                     "zoom_scale": self._zoom_scale,
                     "zoom_center_x": self._zoom_center_x,
@@ -308,5 +354,7 @@ class StatusStore:
                     "pan_deadband": self._pan_deadband,
                     "pan_direction": self._pan_direction,
                     "zoom_maximum": self._zoom_maximum,
+                    "tilt_enabled": self._tilt_enabled,
+                    "tilt_available": self._tilt_available,
                 },
             }

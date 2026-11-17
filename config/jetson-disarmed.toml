@@ -11,7 +11,7 @@ codec = "h265"
 latency_ms = 250
 
 [inference]
-max_fps = 2.0
+max_fps = 0.0
 enabled = true
 backend = "tensorrt"
 detector_model = "/var/lib/shore-tracker/models/surfer_fcos_raw.onnx"
@@ -27,25 +27,22 @@ free_stop_gib = 100
 record_audio = false
 
 [servo]
-# The transport starts at boot, but movement remains DISARMED until the
-# operator clicks ARM. Initial field direction can be reversed in the UI only
-# while stopped.
-enabled = true
-# Select UART manually on the Shore-Spotter web page before starting tracking.
+# RS485 雲台: Moxa R+/R−, Pelco-D 9600 8N1, address 001.
+# Keep disabled until camera-axis direction is physically calibrated.
+enabled = false
 transport = "serial"
-serial_device = "/dev/serial/by-id/replace-with-usb-ttl-adapter"
-serial_baud = 115200
+protocol = "pelco_d"
+serial_device = "/dev/serial/by-id/usb-Moxa_Technologies_Co.__Ltd._UPort_1130-if00-port0"
+serial_baud = 9600
 send_hz = 20
-angle_min_deg = 0.0
-angle_max_deg = 180.0
-search_min_deg = 20.0
-search_max_deg = 160.0
-home_deg = 90.0
-max_slew_deg_s = 30.0
-search_speed_deg_s = 8.0
-pan_gain_deg = 45.0
-pan_deadband = 0.04
-pan_direction = -1
+pelco_address = 1
+pelco_pan_speed = 8
+pelco_tilt_speed = 8
+pan_gain_deg = 45.0 # Compatibility name: dimensionless sensitivity for Pelco-D.
+pan_deadband = 0.20
+pan_direction = 0 # Set +1/-1 only after checking camera-to-head direction.
+tilt_enabled = false
+tilt_direction = 0
 
 [tracking]
 chasing_threshold = 0.70
@@ -68,5 +65,5 @@ zoom_out_per_second = 4.0
 
 [web]
 host = "127.0.0.1"
-port = 8090
+port = 80
 preview_stale_seconds = 2.0

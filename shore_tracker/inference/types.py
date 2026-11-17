@@ -58,6 +58,11 @@ class NormalizedBox:
 
         return self.center_x - 0.5
 
+    @property
+    def tilt_error(self) -> float:
+        """Positive below frame center; pulse direction must be calibrated."""
+        return self.y + self.height / 2.0 - 0.5
+
 
 @dataclass(frozen=True, slots=True)
 class DetectionPrediction:

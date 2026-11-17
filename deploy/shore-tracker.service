@@ -1,5 +1,5 @@
 [Unit]
-Description=Shore Tracker camera, recording, inference, and servo service
+Description=Shore Jetson camera, recording, inference, and servo service
 After=network-online.target shore-tracker-camera-network.service shore-tracker-camera-guard.service
 Wants=network-online.target
 Requires=shore-tracker-camera-network.service shore-tracker-camera-guard.service
@@ -18,6 +18,7 @@ RestartSec=3
 StateDirectory=shore-tracker
 StateDirectoryMode=0700
 NoNewPrivileges=true
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true

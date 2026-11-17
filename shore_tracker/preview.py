@@ -11,6 +11,9 @@ class PreviewFrame:
     sequence: int
     captured_monotonic: float
     jpeg: bytes
+    generation: int = 0
+    source_pts_ns: int | None = None
+    pipeline_delay_ms: int | None = None
 
 
 class PreviewSession:
@@ -21,8 +24,13 @@ class PreviewSession:
         self._generation = generation
         self._frame: PreviewFrame | None = None
 
-    def publish(self, jpeg: bytes, *, captured_monotonic: float | None = None) -> None:
-        self._store._publish_for_session(self, jpeg, captured_monotonic)
+    @property
+    def generation(self):
+        return self._generation
+
+    def publish(self, jpeg: bytes, *, captured_monotonic: float | None = None,
+                source_pts_ns: int | None = None, pipeline_delay_ms: int | None = None) -> None:
+        self._store._publish_for_session(self, jpeg, captured_monotonic, source_pts_ns, pipeline_delay_ms)
 
     def latest(self) -> PreviewFrame | None:
         with self._store._condition:
@@ -55,11 +63,13 @@ class PreviewStore:
             self._condition.notify_all()
             return PreviewSession(self, self._active_generation)
 
-    def publish(self, jpeg: bytes, *, captured_monotonic: float | None = None) -> None:
+    def publish(self, jpeg: bytes, *, captured_monotonic: float | None = None,
+                source_pts_ns: int | None = None, pipeline_delay_ms: int | None = None) -> None:
         """Publish an unscoped frame (primarily for simple/test producers)."""
 
         with self._condition:
-            frame = self._new_frame(jpeg, captured_monotonic)
+            frame = self._new_frame(jpeg, captured_monotonic, source_pts_ns=source_pts_ns,
+                                    pipeline_delay_ms=pipeline_delay_ms)
             self._frame = frame
             self._note_frame_time(frame.captured_monotonic)
             self._condition.notify_all()
@@ -69,9 +79,12 @@ class PreviewStore:
         session: PreviewSession,
         jpeg: bytes,
         captured_monotonic: float | None,
+        source_pts_ns: int | None = None,
+        pipeline_delay_ms: int | None = None,
     ) -> None:
         with self._condition:
-            frame = self._new_frame(jpeg, captured_monotonic)
+            frame = self._new_frame(jpeg, captured_monotonic,
+                                    session._generation, source_pts_ns, pipeline_delay_ms)
             session._frame = frame
             if session._generation == self._active_generation:
                 self._frame = frame
@@ -98,6 +111,9 @@ class PreviewStore:
         self,
         jpeg: bytes,
         captured_monotonic: float | None,
+        generation: int = 0,
+        source_pts_ns: int | None = None,
+        pipeline_delay_ms: int | None = None,
     ) -> PreviewFrame:
         if not jpeg.startswith(b"\xff\xd8") or not jpeg.endswith(b"\xff\xd9"):
             raise ValueError("preview frame must be a complete JPEG")
@@ -111,6 +127,9 @@ class PreviewStore:
                     else captured_monotonic
                 ),
                 jpeg=bytes(jpeg),
+                generation=generation,
+                source_pts_ns=source_pts_ns,
+                pipeline_delay_ms=pipeline_delay_ms,
             )
 
     def latest(self) -> PreviewFrame | None:

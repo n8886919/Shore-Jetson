@@ -1,5 +1,15 @@
 # Camera and recording pipeline
 
+The supplied [IP Camera manual](assets/manuals/camera-and-rs485-pan-tilt-20261106.pdf#page=1)
+occupies PDF pages 1–5; see the [manual index](hardware-manuals.md) for provenance
+and model applicability.
+
+Current actuators are **two 180° PWM servos through CH340G USB-TTL → M0/M1**
+(owner reconfirmed 2026-11-14); the RS485 head is stored.
+See [the control contract](servo-controller.md). No camera was attached during
+the 2026-11-06 head-only tests. Camera ONVIF/RTSP and optical-lens capabilities
+are independent of head motion and have not been established by those tests.
+
 The authenticated RTSP URI is read from the environment and assigned directly
 to `rtspsrc`; it is never placed in TOML, command arguments or UI status.
 

@@ -24,13 +24,12 @@ config/secrets.env
 var/secrets/
 
 
-# Build output and local agent/deployment records.
+# Build output and local agent/deployment records. Root AGENTS.md is shareable.
 build/
 dist/
 *.egg-info/
 .codex/
 .agents/
-AGENTS.md
 STATUS.md
 
 # Private media and device-specific network/deployment configuration.

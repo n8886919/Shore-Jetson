@@ -1,29 +1,65 @@
-# Direct M0 UART commissioning
+# PWM servo 接線與驗收
 
-1. Review the sibling source with `python3 -m tools.check_shore_spotter`.
-2. Confirm GXServo 42 kg / 180 degrees and controller M0. Power off equipment
-   before moving wires to Jetson J12 pin 8 TX -> controller RX and pin 6 GND.
-   Controller TX and positive supply do not connect to Jetson.
-3. Apply the prepared update while tracking is DISARMED and event recording idle.
-   Preserve field gain, deadband, direction, zoom and camera orientation. The new
-   service must remain DISARMED; opening UART alone must not send any command.
-4. Confirm serial service readiness, camera link/advancing frames and inference.
-   A ttyTHS1 device or successful write alone does not verify the physical signal.
-5. With explicit movement authorization and a person at the servo power cut-off,
-   verify 1500 us centre, direction and bounded motion around 90 degrees. Do not
-   run the smoke tool alongside the service owning the UART. The tool requires
-   `--execute --confirm-centered` and never runs as part of deployment.
-6. Verify installed mechanical limits before full-range tracking. Test STOP,
-   stale target, disconnect/restart and manual re-ARM; STOP is not power-off and
-   the controller may complete its last requested position.
-7. Restore camera Ethernet, check image orientation, then validate a full surf
-   sequence: chase -> lock -> follow -> finish -> completed MKV -> private Drive.
+現行硬體為 **CH340G USB-TTL → M0／M1 控制板 → 兩顆 180° PWM servo**，
+使用者於 2026-11-14 再次確認 RS485 雲台已收起。先讀[控制契約](servo-controller.md)
+與[硬體](hardware.md)。本頁是另行獲准實機工作時的核對入口，不代表本次已部署或驗收。
 
-For a separately authorized bounded motion test, after the service has stopped:
-`python3 -m tools.servo_smoke_test --config <local.toml> --execute --confirm-centered`.
-It assumes an independently verified 90-degree centre, then requests a slow
-90 -> 95 -> 85 -> 90 sequence. There is no ACK or position sensor.
+1. 核對當次 Jetson、實際設定路徑與軟體版本，保持 DISARMED；
+   串口只允許一個持有者。先協調正在進行的測試，不搶占串口或自行停啟服務。
+2. 換線前斷電，核對目前 servo／控制板的額定供電、邏輯電位、TX→RX 與共地。
+   確認 CH340G 身分與固定裝置路徑；不沿用 Moxa、RS485 A／B 或 12 V 接法。
+3. 核對 `protocol="m0_pulse"`、9600 8N1、兩個不同的 0／1 通道。
+   一般 TOML 範例仍選 Pelco-D；`jetson-m0-uart.toml` 仍有舊 `/dev/ttyTHS1`、
+   已啟用輸出與運動參數，兩者都不是已核實的現行設定，不可原樣部署。
+4. 取得當次動作授權後，依現場確認的起點及允許範圍逐軸小幅核對通道、方向與停止行為。
+   不假定起點是 90°，不把 500–2500 µs、舊方向或 85–95° 當安全範圍。
+   主頁 Pelco-D 方向面板不適用 PWM；舊 motion 工具的中立與裝置假設也須先核對。
+5. 自動跟拍前，核對已驗收的中立／限制與 `home_deg` 等要求值，並明確核准設定及部署。
+   開串口、ARM 本身不送快取／中位，但新決策可要求 home；重新 ARM 不會讀回實體位置。
+   分別驗證 STOP、目標暫失保持、影像逾時、控制更新逾時與重新 ARM。
+6. PWM STOP 只清除待送位置並停送，不能撤銷控制板已收到的位置或斷電；現場須能切斷動力。
+   記錄當次實際觀察及範圍，再分別驗收帶載跟拍、錄影與上傳。
 
-No network, boot firmware, GPIO pinmux, lights or audio changes are included in
-the UART application update. If the pin cannot transmit, diagnose it before
-considering any device-tree or firmware changes.
+[歷史 M0 資料](legacy-m0-controller.md)的 2026-10-30／31 小幅動作與通道校準
+只證明當時設備。UART 寫入、要求角度和主機測試不能代替本次機械驗收。
+
+## 歷史 RS485 流程（已收起）
+
+以下僅供日後明確恢復 RS485 雲台時參考，必須重新核對裝置與當次授權；
+不適用現行 PWM。紙本規格與當時能力見[控制契約的歷史章節](servo-controller.md#歷史-rs485-雲台已收起)。
+
+1. 確認目前 Jetson、Moxa UPort 1130 與固定裝置路徑。追蹤保持 DISARMED，
+   串口不得與其他程式共用；不要沿用 `ttyUSB0` 編號或舊 USB-TTL 設定。
+2. 先停止，再關閉雲台 12 V 電源後檢查接線。Nano USB → Moxa；Moxa R+／R−
+   接雲台 A／B，T+／T−留空、不短接。雲台另供 12 V，不接 Nano 排針。
+   A／B 正負依設備資料與現場確認，不猜字母極性。
+3. 核對 RS-485 2-wire、Pelco-D、9600 8N1、地址 001。若需補裝驅動，
+   先確認核心與相符 headers、保留可回復方案，並取得該次安裝授權。
+   參考[驅動與手動測試](pelco-d-test.md)。不為轉接器更換整個 Jetson 核心。
+4. 在主畫面點齒輪，使用「雲台手動控制」。設定須選 `protocol="pelco_d"`；
+   「連接雲台」與「啟用手動」不應自行移動。自動輸出可保持 `servo.enabled=false`
+   以進行校準；不要把 Moxa 交給 M0 writer。主程式負責串口交接。
+5. 取得當次明確動作授權並由現場人員掌握 12 V 電源後，以預設速度 8 短按，
+   確認各軸方向、放開／紅色 STOP 的實際停止與是否有持續轉動。主機寫入、TxD 閃燈
+   不等於物理動作證據。不要假設目前位置是中立或一次走完整行程。
+6. 純讀取與動作驗收分開。2026-11-06 的 42 組查詢均未收到 RX；
+   這不是所有功能不支援的證明。回傳路徑、位置與限位未確認前，不啟用閉迴路角度、
+   自動回中或碰撞保護，也不把舊 90°、85–95° 或脈寬當作此雲台的安全範圍。
+7. 測試結束送 STOP 並 DISARM，記錄串口、軟體版本、具體動作及現場結果。
+   STOP 不是斷電；斷線、程序終止與重啟的實體停止能力需分別驗收。
+
+主程式現已實作 `pelco_d` 方向／速度跟拍；本機測試使用假串口，不代表已部署或驗收。
+另行獲准測試自動跟拍時，先裝好相機，依[設定契約](servo-controller.md#自動跟拍主程式)
+校準畫面與兩軸正負方向；保持低速度上限及俯仰預設關閉。先於主設定頁斷開雲台手動控制，
+核對待部署版本與裝置設定，再啟用主程式。開串口及 ARM 應保持不動；以可控目標依序驗證
+追浪只試拍、起乘鎖定才跟隨、容許區停止、目標暫失立即停止、影像逾時 DISARM、
+人工 STOP 及重新 ARM 等待新影格。失敗先停用，不沿用舊 M0 的部署或動作工具。
+
+2026-11-06 已確認的是使用者觀察到手動轉動。尚未驗收完整機械行程、各級轉速、
+相機帶載、回傳路徑與自動跟拍；本次測試未接相機。
+相機安裝後，另行校準畫面方向、拍攝基準、水平／俯仰控制與停止條件，再驗證
+追浪 → 鎖定 → 跟拍 → 收尾 → MKV → 私人上傳的完整流程。
+
+`tools.servo_smoke_test`、`tools.servo_motion_test` 與 `deploy/apply-m0-update.py`
+屬 M0/PWM 路徑且帶有歷史參數假設；不是 RS485 驗收工具。網路、韌體、pinmux、燈光與音訊變更
+均不包含在本接線流程內。

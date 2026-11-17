@@ -106,7 +106,7 @@ def test_slow_inference_does_not_block_preview_and_skips_old_frames():
         assert worker.close(timeout=1)
 
 
-def test_default_two_hz_uses_latest_frames_without_throttling_preview():
+def test_explicit_two_hz_uses_latest_frames_without_throttling_preview():
     import time
     from threading import Thread
     from shore_tracker.preview import PreviewStore
@@ -122,7 +122,7 @@ def test_default_two_hz_uses_latest_frames_without_throttling_preview():
         while not stop.is_set():
             store.publish(b'\xff\xd8'+str(index).encode()+b'\xff\xd9');index+=1;stop.wait(.01)
     producer=Thread(target=produce);producer.start()
-    worker=InferenceWorker(preview=store,status=status,coordinator=Sink(),models=Model(),stale_seconds=1.5)
+    worker=InferenceWorker(preview=store,status=status,coordinator=Sink(),models=Model(),stale_seconds=1.5,max_fps=2)
     try:
         assert worker.max_fps==2
         worker.start();assert done.wait(3)
@@ -161,6 +161,67 @@ def test_rate_change_wakes_waiter_and_stop_does_not_wait_for_rate_period():
 def test_invalid_rate_cannot_replace_current_rate():
     import pytest
     worker=InferenceWorker(preview=Preview(),status=StatusStore(),coordinator=Coordinator(),models=Models(),stale_seconds=1.5)
-    for value in (0,11,float('nan'),float('inf'),True,'2',None):
+    for value in (-1,.5,11,float('nan'),float('inf'),True,'2',None):
         with pytest.raises(ValueError):worker.set_max_fps(value)
-        assert worker.max_fps==2
+        assert worker.max_fps==0
+
+
+def test_on_demand_does_no_inference_until_arm_and_discards_inflight_stop():
+    import time
+    from shore_tracker.preview import PreviewStore
+    store = PreviewStore()
+    status = StatusStore()
+    for component in ('camera', 'servo'):
+        status.update_component(component, 'ready')
+    entered, release, completed = Event(), Event(), Event()
+    calls, published = [], []
+    class Model:
+        def load(self): pass
+        def infer_jpeg(self, jpeg):
+            calls.append(jpeg)
+            entered.set()
+            assert release.wait(2)
+            return ()
+    class Sink:
+        def process_frame(self, observations, **kwargs): published.append(observations)
+    worker = InferenceWorker(preview=store,status=status,coordinator=Sink(),models=Model(),
+                             stale_seconds=1.5,on_demand=True,max_fps=10)
+    old = b'\xff\xd8before-arm\xff\xd9'
+    store.publish(old)
+    worker.start()
+    try:
+        deadline = time.monotonic() + 1
+        while status.snapshot()['components']['inference']['state'] != 'idle' and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert status.can_arm()[0]
+        assert not entered.wait(.15)
+        assert status.arm()[0]
+        assert not entered.wait(.1)  # Pre-ARM images cannot become a target.
+        store.publish(b'\xff\xd8after-arm\xff\xd9')
+        assert entered.wait(1)
+        status.disarm('test stop')
+        # Even immediate re-ARM cannot consume the old run's GPU result.
+        assert status.arm()[0]
+        release.set()
+        time.sleep(.15)
+        assert published == []
+        status.disarm('done')
+        assert len(calls) == 1
+    finally:
+        release.set()
+        assert worker.close(timeout=1)
+
+
+def test_default_worker_does_not_wait_between_available_frames():
+    import time
+    coordinator = Coordinator()
+    worker = InferenceWorker(preview=Preview(), status=StatusStore(),
+                             coordinator=coordinator, models=Models(), stale_seconds=1.5)
+    assert worker.max_fps == 0
+    started = time.monotonic()
+    worker.start()
+    try:
+        assert coordinator.completed.wait(.35)
+        assert time.monotonic() - started < .35
+    finally:
+        assert worker.close(timeout=.3)

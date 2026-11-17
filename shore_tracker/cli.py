@@ -11,7 +11,7 @@ from shore_tracker.runtime import ShoreTrackerRuntime
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="shore-tracker")
+    parser = argparse.ArgumentParser(prog="shore-tracker", description="Shore Jetson surf tracking and recording")
     parser.add_argument(
         "--config",
         default="/etc/shore-tracker/config.toml",

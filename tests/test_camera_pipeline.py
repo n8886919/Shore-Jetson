@@ -26,8 +26,49 @@ from shore_tracker.camera.pipeline import _FragmentBoundaryTracker, _GstPipeline
 SECRET_URI = "rtsp://camera-user:camera-password@192.0.2.20/private/live"
 
 
+def test_gstreamer_jpeg_delivery_preserves_source_pts():
+    from types import SimpleNamespace
+    received=[]
+    buffer=SimpleNamespace(pts=123456789,get_size=lambda:4,extract_dup=lambda *_:b'jpeg')
+    sample=SimpleNamespace(get_buffer=lambda:buffer)
+    sink=SimpleNamespace(emit=lambda _:sample)
+    handle=object.__new__(_GstPipelineHandle)
+    handle._gst=SimpleNamespace(FlowReturn=SimpleNamespace(OK='ok',EOS='eos',ERROR='error'))
+    handle._on_preview_jpeg=lambda jpeg, **metadata: received.append((jpeg,metadata))
+    assert handle._new_sample(sink) == 'ok'
+    assert received == [(b'jpeg',{'source_pts_ns':123456789})]
+
+
+def test_sample_timing_reaches_the_preview_through_the_camera_adapter(tmp_path):
+    from types import SimpleNamespace
+    factory=FakeFactory()
+    adapter,status,preview=make_adapter(tmp_path,factory)
+    assert adapter.start()
+    buffer=SimpleNamespace(pts=1_000_000_000,get_size=lambda:7,extract_dup=lambda *_:b'\xff\xd8jpg\xff\xd9')
+    sample=SimpleNamespace(get_buffer=lambda:buffer,get_segment=lambda:SimpleNamespace(to_running_time=lambda *_:1_000_000_000))
+    handle=object.__new__(_GstPipelineHandle)
+    handle._gst=SimpleNamespace(Format=SimpleNamespace(TIME='time'),FlowReturn=SimpleNamespace(OK='ok',EOS='eos',ERROR='error'))
+    handle._pipeline=SimpleNamespace(get_clock=lambda:SimpleNamespace(get_time=lambda:8_000_000_000),get_base_time=lambda:2_000_000_000)
+    handle._on_preview_jpeg=factory.on_preview
+    assert handle._new_sample(SimpleNamespace(emit=lambda _:sample))=='ok'
+    assert preview.latest().pipeline_delay_ms==5000
+    assert preview.latest().source_pts_ns==1_000_000_000
+    assert status.snapshot()['components']['camera']['state']=='ready'
+
+
 def properties(spec, element_name: str) -> dict[str, object]:
     return dict(spec.element(element_name).properties)
+
+
+def test_decoded_inference_keeps_encoded_recording_and_preview_independent(tmp_path):
+    original = build_pipeline_spec('h265', tmp_path / 'clip-%05d.mkv')
+    raw = build_pipeline_spec('h265', tmp_path / 'clip-%05d.mkv', decoded_inference=True)
+    for name in ('record_queue', 'record_parse', 'segment_sink', 'preview_caps'):
+        assert properties(original, name) == properties(raw, name)
+    assert properties(raw, 'inference_rate_caps')['caps'] == 'video/x-raw(memory:NVMM),framerate=4/1'
+    assert properties(raw, 'inference_raw_caps')['caps'] == 'video/x-raw,format=RGBA'
+    assert properties(raw, 'inference_queue')['leaky'] == 'downstream'
+    assert len([e for e in raw.elements if e.factory == 'nvv4l2decoder']) == 1
 
 
 @pytest.mark.parametrize(

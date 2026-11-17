@@ -1,20 +1,25 @@
-"""One clip recorder shared by automatic following and the extra manual trigger."""
+"""One clip recorder shared by following, continuous tracking and legacy manual requests."""
 from __future__ import annotations
 
 import threading
 import time
+import json
+from pathlib import Path
 
 from shore_tracker.inference import FollowState
 
 
 class RecordingTriggers:
-    def __init__(self, recorder, *, armed_reader, stale_seconds=1.5, clock=time.monotonic):
+    def __init__(self, recorder, *, armed_reader, stale_seconds=1.5, clock=time.monotonic,
+                 settings_path=None):
         self.recorder = recorder
         self.armed_reader = armed_reader
         self.stale_seconds = stale_seconds
         self.clock = clock
         self._lock = threading.RLock()
         self._manual = False
+        self._continuous = False
+        self._settings_path = Path(settings_path) if settings_path is not None else None
         self._automatic = False
         self._qualified = False
         self._target_id = None
@@ -28,9 +33,38 @@ class RecordingTriggers:
 
     def recover(self):
         self.recorder.recover()
+        if self._settings_path is not None:
+            try:
+                settings = json.loads(self._settings_path.read_text())
+                if isinstance(settings, dict) and type(settings.get('continuous')) is bool:
+                    self._continuous = settings['continuous']
+            except (OSError, ValueError):
+                pass  # A new or unreadable preference defaults to event recording.
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name='recording-triggers', daemon=True)
         self._thread.start()
+
+    def set_continuous(self, enabled):
+        if type(enabled) is not bool:
+            return False, '連續錄影設定必須為開啟或關閉'
+        with self._lock:
+            if self._closing:
+                return False, '服務正在結束'
+            if self._settings_path is not None:
+                try:
+                    self._settings_path.parent.mkdir(parents=True, exist_ok=True)
+                    temp = self._settings_path.with_suffix('.tmp')
+                    temp.write_text(json.dumps({'continuous': enabled})+'\n')
+                    temp.chmod(0o600)
+                    temp.replace(self._settings_path)
+                except OSError:
+                    return False, '無法儲存錄影設定'
+            self._continuous = enabled
+            if enabled and self.armed_reader():
+                self.recorder.note_trigger('continuous')
+            self._retry_at = 0.0
+            self._error = ''
+        return True, '連續錄影已開啟' if enabled else '已改為自動跟拍錄影'
 
     def command(self, action):
         if action not in {'start', 'stop'}:
@@ -79,6 +113,8 @@ class RecordingTriggers:
         with self._lock:
             result = self.recorder.snapshot()
             result.update(manual_requested=self._manual,
+                          continuous_enabled=self._continuous,
+                          continuous_requested=self._continuous and bool(self.armed_reader()),
                           tracking_requested=self._automatic,
                           tracking_qualified=self._qualified,
                           tracking_target_id=self._target_id)
@@ -93,7 +129,8 @@ class RecordingTriggers:
                     or now - self._decision_at > self.stale_seconds):
                 self._target_id = None
                 self._automatic = False
-            wanted = self._manual or self._automatic
+            continuous = self._continuous and self.armed_reader()
+            wanted = self._manual or self._automatic or continuous
             snapshot = self.recorder.snapshot()
             state = snapshot['state']
             if state == 'failed' and snapshot.get('id') != self._failed_id:
@@ -107,7 +144,7 @@ class RecordingTriggers:
             if state == 'finalizing': return  # pending triggers resume after EOS
             if state in {'idle', 'failed'}:
                 if now < self._retry_at: return
-                trigger = 'tracking' if self._automatic else 'manual'
+                trigger = 'continuous' if continuous else 'tracking' if self._automatic else 'manual'
                 ok, detail = self.recorder.command('start', trigger=trigger, target_track_id=self._target_id)
                 self._error = '' if ok else detail
                 if not ok:
@@ -115,6 +152,7 @@ class RecordingTriggers:
                     return
                 self._retry_at = 0.0
             if self._manual: self.recorder.note_trigger('manual')
+            if continuous: self.recorder.note_trigger('continuous')
             if self._automatic: self.recorder.note_trigger('tracking', self._target_id, qualified=self._qualified)
 
     def _run(self):

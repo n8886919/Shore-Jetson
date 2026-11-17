@@ -1,0 +1,54 @@
+# JetPack 4.6.6 / Nano 4 GB. Initial installation has no hardware credentials.
+# Enable the UART only after identifying the controller and checking wiring.
+data_dir = "~/.local/share/shore-tracker/data"
+
+[camera]
+interface = "eth0"
+codec = "h265"
+preview_fps = 10
+native_display = true
+decoded_inference = true
+inference_frame_fps = 4
+
+[inference]
+enabled = true
+max_fps = 0.0
+score_threshold = 0.70
+confirmation_frames = 3
+detector_model = "~/.local/share/shore-tracker/models/nano-trt82/surfer_fcos_raw.onnx"
+action_model = "~/.local/share/shore-tracker/models/nano-trt82/actions_mobilenet_v3_small.onnx"
+engine_dir = "~/.local/share/shore-tracker/models/nano-trt82/engines"
+
+[recording]
+root = "~/.local/share/shore-tracker/data/recordings"
+free_warning_gib = 4
+free_stop_gib = 2
+record_audio = false
+
+[servo]
+# RS485 雲台: Moxa R+/R−, Pelco-D 9600 8N1, address 001.
+# Keep disabled until camera-axis direction is physically calibrated.
+enabled = false
+transport = "serial"
+protocol = "pelco_d"
+serial_device = "/dev/serial/by-id/usb-Moxa_Technologies_Co.__Ltd._UPort_1130-if00-port0"
+serial_baud = 9600
+send_hz = 20
+pelco_address = 1
+pelco_pan_speed = 8
+pelco_tilt_speed = 8
+pan_gain_deg = 45.0 # Compatibility name: dimensionless sensitivity for Pelco-D.
+pan_deadband = 0.20
+pan_direction = 0 # Set +1/-1 only after checking camera-to-head direction.
+tilt_enabled = false
+tilt_direction = 0
+
+[zoom]
+maximum = 1.0
+
+[web]
+# Trusted private LAN; no router forwarding.
+allow_lan = true
+h264_preview = true
+host = "0.0.0.0"
+port = 80

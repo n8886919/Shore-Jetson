@@ -8,6 +8,8 @@ from typing import Protocol
 
 from shore_tracker.coordinator import TrackingCoordinator
 from shore_tracker.inference.types import TrackObservation
+from shore_tracker.inference.frames import DecodedFrame
+from shore_tracker.inference.confirmation import DetectionConfirmation
 from shore_tracker.preview import PreviewStore
 from shore_tracker.status import StatusStore
 
@@ -28,8 +30,10 @@ class InferenceWorker:
         coordinator: TrackingCoordinator,
         models: InferenceModels,
         stale_seconds: float,
-        max_fps: float = 2.0,
+        max_fps: float = 0.0,
         clock: Callable[[], float] = time.monotonic,
+        on_demand: bool = False,
+        confirmation_frames: int = 1,
     ) -> None:
         self.preview = preview
         self.status = status
@@ -37,6 +41,8 @@ class InferenceWorker:
         self.models = models
         self.stale_seconds = stale_seconds
         self.clock = clock
+        self.on_demand = on_demand
+        self.confirmation = DetectionConfirmation(confirmation_frames)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._rate_condition = threading.Condition()
@@ -48,8 +54,8 @@ class InferenceWorker:
             return self._max_fps
 
     def set_max_fps(self, value: float) -> None:
-        if type(value) not in {int, float} or not math.isfinite(value) or not 1 <= value <= 10:
-            raise ValueError("辨識頻率必須介於 1–10 Hz")
+        if type(value) not in {int, float} or not math.isfinite(value) or not (value == 0 or 1 <= value <= 10):
+            raise ValueError("辨識頻率必須為 0（不限速）或介於 1–10 Hz")
         with self._rate_condition:
             self._max_fps = float(value)
             self._rate_condition.notify_all()
@@ -57,7 +63,7 @@ class InferenceWorker:
     def _wait_for_rate_slot(self, previous_start: float | None) -> bool:
         with self._rate_condition:
             while not self._stop.is_set():
-                delay = 0.0 if previous_start is None else previous_start + 1.0 / self._max_fps - time.monotonic()
+                delay = 0.0 if previous_start is None or self._max_fps == 0 else previous_start + 1.0 / self._max_fps - time.monotonic()
                 if delay <= 0:
                     return True
                 self._rate_condition.wait(delay)
@@ -92,7 +98,23 @@ class InferenceWorker:
             last_frame_at = self.clock()
             previous_completed_at: float | None = None
             previous_start: float | None = None
+            active_run = None
             while not self._stop.is_set():
+                run = self.status.inference_run() if self.on_demand else None
+                if self.on_demand and run is None:
+                    if self.status.snapshot()['components']['inference']['state'] != 'idle':
+                        self.status.update_component('inference', 'idle', '等待開始追蹤')
+                    previous_completed_at = previous_start = None
+                    active_run = None
+                    last_frame_at = self.clock()
+                    self._stop.wait(.05)
+                    continue
+                if self.on_demand and active_run != run:
+                    active_run = run
+                    self.confirmation.reset()
+                    tracker = getattr(self.models, 'tracker', None)
+                    if tracker is not None:
+                        tracker.reset()
                 # Wait before reading the store so each inference uses the
                 # newest frame, without queuing or slowing preview delivery.
                 if not self._wait_for_rate_slot(previous_start):
@@ -106,10 +128,22 @@ class InferenceWorker:
                         )
                     continue
                 sequence = frame.sequence
+                if self.on_demand and (self.status.inference_run() != run or
+                                       frame.captured_monotonic < run[1]):
+                    continue
                 previous_start = time.monotonic()
                 started = self.clock()
-                observations = self.models.infer_jpeg(frame.jpeg)
+                if isinstance(frame, DecodedFrame):
+                    image = frame.to_image()
+                    observations = self.models.infer_image(image)
+                else:
+                    observations = self.models.infer_jpeg(frame.jpeg)
                 completed = self.clock()
+                if self.on_demand and self.status.inference_run() != run:
+                    continue  # STOP/restart invalidates work already on the GPU.
+                if self.on_demand and completed - frame.captured_monotonic > self.stale_seconds:
+                    continue  # Includes the first GPU warm-up; never steer from it.
+                observations = self.confirmation.update(observations)
                 last_frame_at = completed
                 elapsed = max(1e-6, completed - started)
                 frame_interval = (
@@ -124,7 +158,8 @@ class InferenceWorker:
                     inference_frame_age_ms=round(elapsed * 1000),
                     inference_fps=measured_fps,
                 )
-                self.coordinator.process_frame(observations, now=completed)
+                options = {'inference_run_id': run[0]} if self.on_demand else {}
+                self.coordinator.process_frame(observations, now=completed, **options)
         except Exception:
             self.status.update_component(
                 "inference", "error", "native TensorRT inference stopped"

@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.5)
+project(shore_tracker_desktop LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Qt5 5.9 REQUIRED COMPONENTS Widgets Network)
+add_executable(shore-tracker-desktop main.cpp)
+target_link_libraries(shore-tracker-desktop PRIVATE Qt5::Widgets Qt5::Network)
+install(TARGETS shore-tracker-desktop RUNTIME DESTINATION bin)

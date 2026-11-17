@@ -69,7 +69,7 @@ def main() -> int:
     lock = threading.Lock()
     state = {"frames": 0, "error": False, "eos": False, "opened": 0, "closed": 0}
 
-    def on_preview(jpeg: bytes) -> None:
+    def on_preview(jpeg: bytes, **_metadata) -> None:
         if not (jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9")):
             state["error"] = True
             return

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""One explicitly armed, bounded Jetson-to-Servo movement smoke test."""
+"""Historical angle-servo motion test, not for RS485 雲台.
+
+The 90-degree start and angle targets apply only to the old controller assembly.
+Use docs/pelco-d-test.md for the current head; actual motion requires authorization.
+"""
 
 from __future__ import annotations
 

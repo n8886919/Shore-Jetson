@@ -1,5 +1,5 @@
 [Unit]
-Description=Confine Shore Tracker camera-subnet traffic to dedicated Ethernet
+Description=Confine Shore Jetson camera-subnet traffic to dedicated Ethernet
 After=network-pre.target
 Before=shore-tracker.service
 

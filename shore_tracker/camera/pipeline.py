@@ -218,6 +218,9 @@ def build_pipeline_spec(
     preview_height: int = 540,
     preview_fps: int = 20,
     rotation_degrees: int = 0,
+    native_display: bool = False,
+    decoded_inference: bool = False,
+    inference_frame_fps: int = 4,
 ) -> PipelineSpec:
     """Build a URI-free, inspectable specification for one encoded video stream."""
 
@@ -350,6 +353,57 @@ def build_pipeline_spec(
         LinkSpec("preview_caps", "preview_jpeg"),
         LinkSpec("preview_jpeg", "preview_sink"),
     )
+    if native_display:
+        elements += (
+            ElementSpec("tee", "native_tee", (("allow-not-linked", True),)),
+            ElementSpec("queue", "native_preview_queue", (("leaky", "downstream"), ("max-size-buffers", 2), ("max-size-bytes", 0), ("max-size-time", 0))),
+            ElementSpec("queue", "native_queue", (("leaky", "downstream"), ("max-size-buffers", 1), ("max-size-bytes", 0), ("max-size-time", 0))),
+            ElementSpec("nvvidconv", "native_convert", (("flip-method", 2 if rotation_degrees == 180 else 0),)),
+            ElementSpec("capsfilter", "native_caps", (("caps", f"video/x-raw,format=BGRx,width={preview_width},height={preview_height}"),)),
+            ElementSpec("videorate", "native_rate", (("drop-only", True),)),
+            ElementSpec("capsfilter", "native_rate_caps", (("caps", f"video/x-raw,format=BGRx,framerate={preview_fps}/1"),)),
+            ElementSpec("appsink", "native_sink", (("emit-signals", True), ("max-buffers", 1), ("drop", True), ("sync", False), ("wait-on-eos", False))),
+        )
+        # Branch off the existing decoder, preserving inference and recording.
+        links = tuple(link for link in links if link.source != "preview_decoder") + (
+            LinkSpec("preview_decoder", "native_tee"),
+            LinkSpec("native_tee", "native_preview_queue", "src_%u", "sink", request_source=True),
+            LinkSpec("native_preview_queue", "preview_nvconvert"),
+            LinkSpec("native_tee", "native_queue", "src_%u", "sink", request_source=True),
+            LinkSpec("native_queue", "native_convert"),
+            LinkSpec("native_convert", "native_caps"),
+            LinkSpec("native_caps", "native_rate"),
+            LinkSpec("native_rate", "native_rate_caps"),
+            LinkSpec("native_rate_caps", "native_sink"),
+        )
+    if decoded_inference:
+        if type(inference_frame_fps) is not int or not 1 <= inference_frame_fps <= 20:
+            raise ValueError("inference_frame_fps must be in [1, 20]")
+        elements += (
+            ElementSpec("tee", "decoded_tee", (("allow-not-linked", True),)),
+            ElementSpec("queue", "display_queue", (("leaky", "downstream"), ("max-size-buffers", 2), ("max-size-bytes", 0), ("max-size-time", 0))),
+            ElementSpec("videorate", "display_rate", (("drop-only", True),)),
+            ElementSpec("capsfilter", "display_rate_caps", (("caps", f"video/x-raw(memory:NVMM),framerate={preview_fps}/1"),)),
+            ElementSpec("queue", "inference_queue", (("leaky", "downstream"), ("max-size-buffers", 2), ("max-size-bytes", 0), ("max-size-time", 0))),
+            ElementSpec("videorate", "inference_rate", (("drop-only", True),)),
+            ElementSpec("capsfilter", "inference_rate_caps", (("caps", f"video/x-raw(memory:NVMM),framerate={inference_frame_fps}/1"),)),
+            ElementSpec("nvvidconv", "inference_convert", (("flip-method", 2 if rotation_degrees == 180 else 0),)),
+            ElementSpec("capsfilter", "inference_raw_caps", (("caps", "video/x-raw,format=RGBA"),)),
+            ElementSpec("appsink", "inference_sink", (("emit-signals", True), ("max-buffers", 1), ("drop", True), ("sync", False), ("wait-on-eos", False))),
+        )
+        links = tuple(link for link in links if link.source != "preview_decoder") + (
+            LinkSpec("preview_decoder", "decoded_tee"),
+            LinkSpec("decoded_tee", "display_queue", "src_%u", "sink", request_source=True),
+            LinkSpec("display_queue", "display_rate"),
+            LinkSpec("display_rate", "display_rate_caps"),
+            LinkSpec("display_rate_caps", "native_tee" if native_display else "preview_nvconvert"),
+            LinkSpec("decoded_tee", "inference_queue", "src_%u", "sink", request_source=True),
+            LinkSpec("inference_queue", "inference_rate"),
+            LinkSpec("inference_rate", "inference_rate_caps"),
+            LinkSpec("inference_rate_caps", "inference_convert"),
+            LinkSpec("inference_convert", "inference_raw_caps"),
+            LinkSpec("inference_raw_caps", "inference_sink"),
+        )
     return PipelineSpec(
         codec=selected,
         elements=elements,
@@ -537,7 +591,7 @@ class PipelineFactory(Protocol):
         self,
         spec: PipelineSpec,
         rtsp_uri: str,
-        on_preview_jpeg: Callable[[bytes], None],
+        on_preview_jpeg: Callable[..., None],
         on_event: Callable[[PipelineEvent], None],
     ) -> PipelineHandle: ...
 
@@ -568,8 +622,12 @@ class GStreamerPipelineFactory:
         self,
         *,
         bindings_loader: Callable[[], _GstBindings] = _load_gstreamer,
+        on_decoded_frame: Callable[[bytes, int, int, int], None] | None = None,
+        on_native_frame: Callable | None = None,
     ) -> None:
         self._bindings_loader = bindings_loader
+        self._on_decoded_frame = on_decoded_frame
+        self._on_native_frame = on_native_frame
 
     def build(
         self,
@@ -614,6 +672,17 @@ class GStreamerPipelineFactory:
                     f"required GStreamer element is unavailable: {definition.factory}"
                 )
             for property_name, value in definition.properties:
+                # JetPack 4 ships Gst 1.14: splitmuxsink finalizes synchronously
+                # and accepts a muxer object rather than a muxer factory name.
+                if definition.factory == "splitmuxsink":
+                    if property_name == "async-finalize" and element.find_property(property_name) is None:
+                        continue
+                    if property_name == "muxer-factory" and element.find_property(property_name) is None:
+                        muxer = gst.ElementFactory.make(str(value), None)
+                        if muxer is None:
+                            raise CameraPipelineError("Matroska muxer is unavailable")
+                        element.set_property("muxer", muxer)
+                        continue
                 element.set_property(
                     property_name,
                     self._property_value(
@@ -651,6 +720,10 @@ class GStreamerPipelineFactory:
             on_preview_jpeg=on_preview_jpeg,
             on_event=on_event,
             diagnostic_redactor=rtsp_uri,
+            inference_sink=elements.get("inference_sink"),
+            on_decoded_frame=self._on_decoded_frame,
+            native_sink=elements.get("native_sink"),
+            on_native_frame=self._on_native_frame,
         )
 
     @staticmethod
@@ -763,6 +836,10 @@ class _GstPipelineHandle:
         on_event: Callable[[PipelineEvent], None],
         diagnostic_redactor: RtspUri,
         event_queue_size: int = 1024,
+        native_sink: Any = None,
+        on_native_frame: Callable | None = None,
+        inference_sink: Any = None,
+        on_decoded_frame: Callable[[bytes, int, int, int], None] | None = None,
     ) -> None:
         if event_queue_size < 4:
             raise ValueError("GStreamer event queue must hold at least four messages")
@@ -790,6 +867,19 @@ class _GstPipelineHandle:
         self._eos_requested = False
         self._fragment_boundaries = _FragmentBoundaryTracker(self._emit)
         preview_sink.connect("new-sample", self._new_sample)
+        self._on_decoded_frame = on_decoded_frame
+        self._on_native_frame = on_native_frame
+        if native_sink is not None:
+            if on_native_frame is None:
+                raise CameraPipelineError("native display requires a frame consumer")
+            native_sink.connect("new-sample", self._new_native_sample)
+        if inference_sink is not None:
+            if on_decoded_frame is None:
+                raise CameraPipelineError("decoded inference requires a frame consumer")
+            gi = importlib.import_module("gi")
+            gi.require_version("GstVideo", "1.0")
+            self._gst_video = importlib.import_module("gi.repository.GstVideo")
+            inference_sink.connect("new-sample", self._new_decoded_sample)
         self._bus = pipeline.get_bus()
         self._bus.set_sync_handler(self._bus_message, None)
         self._bus_worker = threading.Thread(
@@ -884,7 +974,18 @@ class _GstPipelineHandle:
             if buffer is None:
                 raise CameraPipelineError("preview sample has no buffer")
             jpeg = bytes(buffer.extract_dup(0, buffer.get_size()))
-            self._on_preview_jpeg(jpeg)
+            pipeline_delay_ms = None
+            try:
+                pts = sample.get_segment().to_running_time(self._gst.Format.TIME, buffer.pts)
+                clock = self._pipeline.get_clock()
+                if 0 <= pts < 2**63 and clock is not None:
+                    pipeline_delay_ms = max(0, round((clock.get_time() - self._pipeline.get_base_time() - pts) / 1e6))
+            except (AttributeError, TypeError, ValueError):
+                pass  # Optional timing must not interrupt image delivery.
+            metadata = {'source_pts_ns': getattr(buffer, 'pts', None)}
+            if pipeline_delay_ms is not None:
+                metadata['pipeline_delay_ms'] = pipeline_delay_ms
+            self._on_preview_jpeg(jpeg, **metadata)
             return self._gst.FlowReturn.OK
         except BaseException:
             self._emit(
@@ -893,6 +994,37 @@ class _GstPipelineHandle:
                     "JPEG preview delivery failed",
                 )
             )
+            return self._gst.FlowReturn.ERROR
+
+    def _new_native_sample(self, sink):
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return self._gst.FlowReturn.EOS
+        caps = sample.get_caps().get_structure(0)
+        width, height = caps.get_value("width"), caps.get_value("height")
+        buffer = sample.get_buffer()
+        # BGRx is four bytes/pixel; nvvidconv's CPU output has aligned rows.
+        data = buffer.extract_dup(0, buffer.get_size())
+        self._on_native_frame(data, width, height, len(data) // height)
+        return self._gst.FlowReturn.OK
+
+    def _new_decoded_sample(self, sink: Any) -> Any:
+        try:
+            if self._null_state_requested:
+                return self._gst.FlowReturn.EOS
+            sample = sink.emit("pull-sample")
+            if sample is None:
+                return self._gst.FlowReturn.EOS
+            info = self._gst_video.VideoInfo()
+            if not info.from_caps(sample.get_caps()):
+                raise CameraPipelineError("invalid decoded video layout")
+            buffer = sample.get_buffer()
+            self._on_decoded_frame(bytes(buffer.extract_dup(0, buffer.get_size())),
+                                   info.width, info.height, info.stride[0],
+                                   source_pts_ns=getattr(buffer, 'pts', None))
+            return self._gst.FlowReturn.OK
+        except BaseException:
+            self._emit(PipelineEvent(PipelineEventKind.ERROR, "decoded inference delivery failed"))
             return self._gst.FlowReturn.ERROR
 
     def _bus_message(self, _bus: Any, message: Any, _user_data: Any) -> Any:
@@ -1255,8 +1387,8 @@ class CameraPipeline:
             handle = self._factory.build(
                 self._spec,
                 self._rtsp_uri._reveal(),
-                lambda jpeg, generation=callback_generation: self._receive_preview(
-                    generation, jpeg
+                lambda jpeg, generation=callback_generation, **metadata: self._receive_preview(
+                    generation, jpeg, **metadata
                 ),
                 lambda event, generation=callback_generation: self._receive_event(
                     generation, event
@@ -1411,7 +1543,8 @@ class CameraPipeline:
                     self._terminal_kind = PipelineEventKind.ERROR
                     self._cleanup_unconfirmed = True
 
-    def _receive_preview(self, generation: int, jpeg: bytes) -> None:
+    def _receive_preview(self, generation: int, jpeg: bytes,
+                         *, source_pts_ns: int | None = None, pipeline_delay_ms: int | None = None) -> None:
         with self._lock:
             if (
                 not self._callbacks_active
@@ -1420,7 +1553,12 @@ class CameraPipeline:
                 or self._terminal_event
             ):
                 return
-            self._preview.publish(jpeg)
+            metadata = {}
+            if source_pts_ns is not None:
+                metadata['source_pts_ns'] = source_pts_ns
+            if pipeline_delay_ms is not None:
+                metadata['pipeline_delay_ms'] = pipeline_delay_ms
+            self._preview.publish(jpeg, **metadata)
             self._last_progress_monotonic = time.monotonic()
             self._status.update_metrics(camera_frame_age_ms=0)
             if not self._stream_confirmed:

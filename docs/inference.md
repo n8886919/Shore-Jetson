@@ -3,6 +3,9 @@
 The detector produces normalized full-frame surfer boxes. A second model emits
 three independent probabilities in this order: `chasing_wave`, `takeoff`, and
 `surfing`. An IoU tracker assigns the IDs used by the state machine.
+After score filtering and non-maximum suppression, at most 10 candidates per
+frame reach the tracker and action classifier, in descending detector confidence.
+This bounds the action batch; the detector still processes the entire image.
 
 A chasing candidate must remain stable before acquisition. Once selected, the
 same ID stays locked through takeoff and surfing; another person cannot steal
@@ -37,10 +40,21 @@ target Jetson and cached locally because they are hardware/runtime specific.
 Missing TensorRT, failed engine construction or inference errors keep the
 system DISARMED. A real-frame GPU benchmark remains a commissioning gate.
 
-## Rate control
+## Throughput
 
-`inference.max_fps` defaults to 2 Hz; valid values are 1–10 Hz. The kiosk control
-page applies changes through `/api/inference/rate`, independently of preview FPS.
-The worker limits model start frequency with interruptible waits and reads the
-latest frame after each wait. Slow inference adds no catch-up queue. Displayed
-FPS is measured between completed frames, and appears after the second result.
+`inference.max_fps = 0` is the default: inference immediately takes the newest
+available frame after completing a pass. There is no frequency setting in the
+kiosk. Optional legacy diagnostic caps of 1–10 Hz remain supported by the API.
+Slow inference never queues old frames. Reported inference FPS measures completed
+results rather than configured limits or detector-only throughput.
+
+## Start/stop and live display
+
+Engines load at boot, but no model executes until tracking is started. STOP,
+run changes and the existing freshness deadline invalidate late results.
+`/api/display-frame` immediately samples the newest JPEG using its sequence
+cursor, with no presentation buffer. Its metadata carries the latest valid
+recognition for the current run; boxes may therefore describe a slightly older
+image. This deliberately favors live video over exact image/box synchronization.
+The browser commits the new image and available boxes together. STOP and stale
+results clear overlays. Recording and Servo safety guards remain independent.

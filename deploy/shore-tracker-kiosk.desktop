@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Shore Tracker Kiosk
+Name=Shore Jetson Kiosk
 Comment=Open the local 1024x600 control display
 Exec=/opt/shore-tracker/deploy/start-kiosk
 Terminal=false

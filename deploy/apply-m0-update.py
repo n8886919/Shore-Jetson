@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Apply this bounded Shore Tracker release; preserve the existing installation."""
+"""Historical GXServo/M0 update helper, not an RS485 雲台 migration.
+
+This helper assumes the old ASCII pulse controller. See docs/legacy-m0-controller.md
+and docs/servo-controller.md before selecting a separately authorized deployment.
+"""
 import argparse
 import copy
 import hashlib

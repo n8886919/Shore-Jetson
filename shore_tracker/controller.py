@@ -20,7 +20,12 @@ class AppController:
         recording=None,
         diagnostics_callback=None,
         camera_reconnect_callback=None,
+        servo_recovery_callback=None,
         inference_rate_callback=None,
+        pan_tilt_snapshot=None,
+        pan_tilt_callback=None,
+        servo_test_snapshot=None,
+        servo_test_callback=None,
     ) -> None:
         self.status = status
         self._arm_callback = arm_callback
@@ -30,11 +35,24 @@ class AppController:
         self.recording = recording
         self._diagnostics_callback = diagnostics_callback
         self._camera_reconnect_callback = camera_reconnect_callback
+        self._servo_recovery_callback = servo_recovery_callback
+        self._servo_recovery_epoch = 0
         self._inference_rate_callback = inference_rate_callback
+        self._pan_tilt_snapshot = pan_tilt_snapshot
+        self._pan_tilt_callback = pan_tilt_callback
+        self._servo_test_snapshot = servo_test_snapshot
+        self._servo_test_callback = servo_test_callback
         self._control_lock = threading.RLock()
 
     def arm(self) -> tuple[bool, str]:
+        recovery_epoch = self._servo_recovery_epoch
         with self._control_lock:
+            if recovery_epoch != self._servo_recovery_epoch:
+                return False, "舵機連線狀態已改變，請重新開始追蹤"
+            if self.servo_test_snapshot().get('connected'):
+                return False, '請先停止雲台測試並等待串口恢復'
+            if self.pan_tilt_snapshot().get("connected"):
+                return False, "請先停用並斷開雲台手動控制"
             if self._camera_recovery_pending():
                 return False, "請等待相機重新連接完成"
             if self._arm_callback is None:
@@ -84,6 +102,7 @@ class AppController:
         pan_deadband: float,
         pan_direction: int,
         zoom_maximum: float,
+        tilt_enabled: bool | None = None,
     ) -> tuple[bool, str]:
         if self._tuning_callback is None:
             return False, "tuning unavailable"
@@ -94,11 +113,13 @@ class AppController:
         ):
             return False, "切換 Pan 方向前請先 STOP"
         try:
+            extra = {} if tilt_enabled is None else {"tilt_enabled": tilt_enabled}
             self._tuning_callback(
                 pan_gain_deg=pan_gain_deg,
                 pan_deadband=pan_deadband,
                 pan_direction=pan_direction,
                 zoom_maximum=zoom_maximum,
+                **extra,
             )
         except (TypeError, ValueError) as exc:
             return False, str(exc)
@@ -113,6 +134,26 @@ class AppController:
             return False
         return True
 
+    def pan_tilt_snapshot(self) -> dict:
+        snapshot = self._pan_tilt_snapshot() if self._pan_tilt_snapshot else {"available": False}
+        tracking = self.status.snapshot()["tracking"]
+        return {**snapshot, "tracking_active": tracking["armed"] or tracking["mode"] == "arming"}
+
+    def pan_tilt_command(self, action: str, values: dict) -> dict:
+        with self._control_lock:
+            if self._pan_tilt_callback is None:
+                raise ValueError("雲台手動控制尚未連接")
+            tracking = self.status.snapshot()["tracking"]
+            active = tracking["armed"] or tracking["mode"] == "arming"
+            if active and action not in {"stop", "disarm"}:
+                raise ValueError("請先停止自動跟拍，再使用雲台手動控制")
+            if active:
+                self.status.disarm("manual pan-tilt STOP")
+                if not self._deliver_stop():
+                    raise OSError("停止指令未確認，請檢查雲台")
+            result = self._pan_tilt_callback(action, values)
+            return {"ok": True, "status": self.pan_tilt_snapshot(), **(result or {})}
+
     def camera_snapshot(self) -> dict:
         if self._camera_controls is None:
             return {"ok": False, "detail": "相機控制尚未就緒"}
@@ -120,6 +161,30 @@ class AppController:
             return {"ok": True, **self._camera_controls.snapshot()}
         except Exception:
             return {"ok": False, "detail": "無法讀取相機設定，請確認相機連線"}
+
+    def servo_test_snapshot(self):
+        snapshot = self._servo_test_snapshot() if self._servo_test_snapshot else {'available': False}
+        tracking = self.status.snapshot()['tracking']
+        return {**snapshot, 'tracking_active': tracking['armed'] or tracking['mode'] == 'arming'}
+
+    def servo_test_command(self, action, values):
+        with self._control_lock:
+            if self._servo_test_callback is None:
+                raise ValueError('雲台測試尚未連接')
+            if action == 'start':
+                tracking = self.status.snapshot()['tracking']
+                if tracking['armed'] or tracking['mode'] == 'arming':
+                    raise ValueError('請先停止自動跟拍')
+                recording = self.recording.snapshot() if self.recording else {}
+                if (recording.get('state', 'idle') != 'idle'
+                        or recording.get('manual_requested') or recording.get('tracking_requested')):
+                    raise ValueError('請先結束錄影並等待收尾')
+                if self._camera_recovery_pending():
+                    raise ValueError('請等待相機重新連接完成')
+            if action in {'start', 'stop'}:
+                self._servo_recovery_epoch += 1
+            result = self._servo_test_callback(action, values)
+            return {'ok': True, 'status': self.servo_test_snapshot(), **(result or {})}
 
     def camera_command(self, action: str, payload: dict) -> tuple[bool, str]:
         with self._control_lock:
@@ -139,6 +204,12 @@ class AppController:
     def recording_command(self, action):
         with self._control_lock:
             return self._recording_command(action)
+
+    def set_recording_mode(self, continuous):
+        with self._control_lock:
+            if self.recording is None:
+                return False, '錄影尚未就緒'
+            return self.recording.set_continuous(continuous)
 
     def _recording_command(self, action):
         if action == "start" and self._camera_recovery_pending():
@@ -169,6 +240,12 @@ class AppController:
 
     def _camera_recovery_pending(self) -> bool:
         return self.diagnostics().get("recovery", {}).get("state") in {"queued", "reconnecting"}
+
+    def recover_servo(self) -> None:
+        """Serialize the UART health check/reopen with ARM, STOP and port handoff."""
+        with self._control_lock:
+            if self._servo_recovery_callback is not None and self._servo_recovery_callback():
+                self._servo_recovery_epoch += 1
 
     def reconnect_camera(self) -> tuple[bool, str]:
         with self._control_lock:

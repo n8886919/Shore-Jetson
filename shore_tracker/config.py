@@ -24,6 +24,9 @@ class CameraConfig:
     latency_ms: int = 250
     rotation_degrees: int = 0
     preview_fps: int = 20
+    native_display: bool = False
+    decoded_inference: bool = False
+    inference_frame_fps: int = 4
 
 
 @dataclass(frozen=True)
@@ -38,7 +41,8 @@ class InferenceConfig:
     )
     engine_dir: Path = Path("/var/lib/shore-tracker/models/engines")
     score_threshold: float = 0.50
-    max_fps: float = 2.0
+    max_fps: float = 0.0
+    confirmation_frames: int = 3
 
 
 @dataclass(frozen=True)
@@ -54,20 +58,31 @@ class RecordingConfig:
 class ServoConfig:
     enabled: bool = True
     transport: str = "serial"
-    protocol: str = "shore_spotter"
+    protocol: str = "m0_pulse"
     serial_device: str = "/dev/serial/by-id/replace-with-usb-ttl-adapter"
-    serial_baud: int = 115200
-    send_hz: int = 20
+    serial_baud: int = 9600
+    send_hz: int = 50
+    pelco_address: int = 1
+    pelco_pan_speed: int = 8
+    pelco_tilt_speed: int = 8
     angle_min_deg: float = 0.0
     angle_max_deg: float = 180.0
     search_min_deg: float = 20.0
     search_max_deg: float = 160.0
     home_deg: float = 90.0
-    max_slew_deg_s: float = 30.0
-    search_speed_deg_s: float = 8.0
+    max_slew_deg_s: float = 5.0
+    max_acceleration_deg_s2: float = 10.0
+    search_speed_deg_s: float = 2.0
     pan_gain_deg: float = 45.0
-    pan_deadband: float = 0.04
+    pan_deadband: float = 0.20
     pan_direction: int = 0
+    pan_channel: int = 0
+    tilt_channel: int = 1
+    tilt_enabled: bool = False
+    tilt_direction: int = 0
+    tilt_min_deg: float = 85.0
+    tilt_max_deg: float = 95.0
+    tilt_home_deg: float = 90.0
 
 
 @dataclass(frozen=True)
@@ -95,8 +110,10 @@ class ZoomConfig:
 
 @dataclass(frozen=True)
 class WebConfig:
+    h264_preview: bool = False
+    allow_lan: bool = False
     host: str = "127.0.0.1"
-    port: int = 8090
+    port: int = 80
     preview_stale_seconds: float = 2.0
 
 
@@ -139,7 +156,7 @@ def _path(value: Any, field: str) -> Path:
     result = Path(_string(value, field))
     if not result.expanduser().is_absolute():
         raise ConfigError(f"{field} must be an absolute path")
-    return result
+    return result.expanduser()
 
 
 def _bool(value: Any, field: str) -> bool:
@@ -189,6 +206,9 @@ def load_config(path: str | Path) -> AppConfig:
         "latency_ms": (_int, 250),
         "rotation_degrees": (_int, 0),
         "preview_fps": (_int, 20),
+        "native_display": (_bool, False),
+        "decoded_inference": (_bool, False),
+        "inference_frame_fps": (_int, 4),
     }, "camera")
     inference = _make(_table(raw, "inference"), InferenceConfig, {
         "enabled": (_bool, True),
@@ -197,7 +217,8 @@ def load_config(path: str | Path) -> AppConfig:
         "action_model": (_path, str(InferenceConfig.action_model)),
         "engine_dir": (_path, str(InferenceConfig.engine_dir)),
         "score_threshold": (_float, 0.50),
-        "max_fps": (_float, 2.0),
+        "max_fps": (_float, 0.0),
+        "confirmation_frames": (_int, 3),
     }, "inference")
     recording = _make(_table(raw, "recording"), RecordingConfig, {
         "root": (_path, str(RecordingConfig.root)),
@@ -207,10 +228,14 @@ def load_config(path: str | Path) -> AppConfig:
         "record_audio": (_bool, False),
     }, "recording")
     servo_values = dict(_table(raw, "servo"))
+    # Preserve omitted-protocol historical configs. Current profiles explicitly
+    # select pelco_d; never silently change an installed controller's wire format.
+    if "protocol" not in servo_values and servo_values.get("serial_baud") == 115200:
+        servo_values["protocol"] = "shore_spotter"
     if servo_values.get("transport") == "api":
         raise ConfigError(
-            'Shore-Spotter removed UDP; set servo.transport="serial" and serial_device '
-            'to the USB-TTL adapter, then select UART on the Shore-Spotter web page'
+            'This app removed UDP; for RS485 set servo.transport="serial", protocol="pelco_d", '
+            'serial_baud=9600 and serial_device to the Moxa adapter; calibrate axis directions'
         )
     # Older Serial configs also contained UDP-only fields; ignore those keys
     # without ever silently changing an API/UDP configuration to UART.
@@ -218,14 +243,21 @@ def load_config(path: str | Path) -> AppConfig:
     servo_values.pop("control_port", None)
     servo = _make(servo_values, ServoConfig, {
         "enabled": (_bool, True), "transport": (_string, "serial"),
-        "protocol": (_string, "shore_spotter"),
-        "serial_device": (_string, ServoConfig.serial_device), "serial_baud": (_int, 115200),
-        "send_hz": (_int, 20), "angle_min_deg": (_float, 0.0),
+        "protocol": (_string, ServoConfig.protocol),
+        "serial_device": (_string, ServoConfig.serial_device), "serial_baud": (_int, ServoConfig.serial_baud),
+        "send_hz": (_int, ServoConfig.send_hz), "angle_min_deg": (_float, 0.0),
+        "pelco_address": (_int, 1), "pelco_pan_speed": (_int, 8), "pelco_tilt_speed": (_int, 8),
         "angle_max_deg": (_float, 180.0), "search_min_deg": (_float, 20.0),
         "search_max_deg": (_float, 160.0), "home_deg": (_float, 90.0),
-        "max_slew_deg_s": (_float, 30.0), "search_speed_deg_s": (_float, 8.0),
-        "pan_gain_deg": (_float, 45.0), "pan_deadband": (_float, 0.04),
+        "max_slew_deg_s": (_float, ServoConfig.max_slew_deg_s),
+        "max_acceleration_deg_s2": (_float, ServoConfig.max_acceleration_deg_s2),
+        "search_speed_deg_s": (_float, ServoConfig.search_speed_deg_s),
+        "pan_gain_deg": (_float, 45.0), "pan_deadband": (_float, ServoConfig.pan_deadband),
         "pan_direction": (_int, 0),
+        "pan_channel": (_int, ServoConfig.pan_channel), "tilt_channel": (_int, ServoConfig.tilt_channel),
+        "tilt_enabled": (_bool, False), "tilt_direction": (_int, 0),
+        "tilt_min_deg": (_float, 85.0), "tilt_max_deg": (_float, 95.0),
+        "tilt_home_deg": (_float, 90.0),
     }, "servo")
     tracking_values = dict(_table(raw, "tracking"))
     # Accept old deployed TOML files, but the retired field has no effect.
@@ -246,7 +278,9 @@ def load_config(path: str | Path) -> AppConfig:
         "zoom_out_per_second": (_float, 4.0),
     }, "zoom")
     web = _make(_table(raw, "web"), WebConfig, {
-        "host": (_string, "127.0.0.1"), "port": (_int, 8090),
+        "host": (_string, "127.0.0.1"), "port": (_int, WebConfig.port),
+        "allow_lan": (_bool, False),
+        "h264_preview": (_bool, False),
         "preview_stale_seconds": (_float, 2.0),
     }, "web")
     config = AppConfig(
@@ -264,6 +298,10 @@ def load_config(path: str | Path) -> AppConfig:
 
 
 def validate_config(cfg: AppConfig) -> None:
+    if type(cfg.camera.decoded_inference) is not bool:
+        raise ConfigError("camera.decoded_inference must be a boolean")
+    if type(cfg.camera.inference_frame_fps) is not int or not 1 <= cfg.camera.inference_frame_fps <= 20:
+        raise ConfigError("camera.inference_frame_fps must be an integer in [1, 20]")
     if cfg.camera.codec not in {"h264", "h265"}:
         raise ConfigError("camera.codec must be h264 or h265")
     if type(cfg.camera.rotation_degrees) is not int or cfg.camera.rotation_degrees not in {0, 180}:
@@ -285,38 +323,58 @@ def validate_config(cfg: AppConfig) -> None:
             raise ConfigError(f"{name} must be an absolute path")
     if not 0.0 <= cfg.inference.score_threshold <= 1.0:
         raise ConfigError("inference.score_threshold must be in [0, 1]")
+    if not 1 <= cfg.inference.confirmation_frames <= 10:
+        raise ConfigError("inference.confirmation_frames must be in [1, 10]")
     if (type(cfg.inference.max_fps) not in {int, float}
             or not math.isfinite(cfg.inference.max_fps)
-            or not 1 <= cfg.inference.max_fps <= 10):
-        raise ConfigError("inference.max_fps must be in [1, 10]")
+            or not (cfg.inference.max_fps == 0 or 1 <= cfg.inference.max_fps <= 10)):
+        raise ConfigError("inference.max_fps must be 0 (unlimited) or in [1, 10]")
     if cfg.recording.segment_seconds != 600 or cfg.recording.record_audio:
         raise ConfigError("recording must be 600-second MKV without audio")
     if cfg.recording.free_stop_gib <= 0 or cfg.recording.free_stop_gib >= cfg.recording.free_warning_gib:
         raise ConfigError("recording free-space thresholds are invalid")
     if cfg.servo.transport != "serial":
-        raise ConfigError("servo.transport must be serial (Shore-Spotter UART)")
-    expected_baud = {"shore_spotter": 115200, "m0_pulse": 9600}.get(cfg.servo.protocol)
+        raise ConfigError("servo.transport must be serial (direct controller UART)")
+    expected_baud = {"shore_spotter": 115200, "m0_pulse": 9600, "pelco_d": 9600}.get(cfg.servo.protocol)
     if expected_baud is None:
-        raise ConfigError("servo.protocol must be shore_spotter or m0_pulse")
+        raise ConfigError("servo.protocol must be pelco_d, shore_spotter or m0_pulse")
     if cfg.servo.serial_baud != expected_baud:
         raise ConfigError(f"servo.serial_baud must be {expected_baud} for {cfg.servo.protocol}")
     if not cfg.servo.serial_device.startswith("/dev/"):
         raise ConfigError("servo.serial_device must be under /dev")
-    if not 10 <= cfg.servo.send_hz <= 20:
-        raise ConfigError("servo.send_hz must be in [10, 20] for the 250 ms watchdog")
-    maximum = 180
-    if not 0 <= cfg.servo.angle_min_deg < cfg.servo.angle_max_deg <= maximum:
-        raise ConfigError(f"servo angle limits must be within [0, {maximum}]")
-    if not cfg.servo.angle_min_deg <= cfg.servo.search_min_deg < cfg.servo.search_max_deg <= cfg.servo.angle_max_deg:
-        raise ConfigError("servo search range is invalid")
-    if not cfg.servo.search_min_deg <= cfg.servo.home_deg <= cfg.servo.search_max_deg:
-        raise ConfigError("servo.home_deg must be inside search range")
-    if cfg.servo.max_slew_deg_s <= 0 or not 0 < cfg.servo.search_speed_deg_s <= cfg.servo.max_slew_deg_s:
-        raise ConfigError("servo speeds are invalid")
-    if cfg.servo.pan_gain_deg <= 0 or not 0 <= cfg.servo.pan_deadband < 0.5:
+    if not 10 <= cfg.servo.send_hz <= 50:
+        raise ConfigError("servo.send_hz must be in [10, 50] for the 250 ms host deadline")
+    if cfg.servo.protocol != "pelco_d":
+        maximum = 180
+        if not 0 <= cfg.servo.angle_min_deg < cfg.servo.angle_max_deg <= maximum:
+            raise ConfigError(f"servo angle limits must be within [0, {maximum}]")
+        if not cfg.servo.angle_min_deg <= cfg.servo.search_min_deg < cfg.servo.search_max_deg <= cfg.servo.angle_max_deg:
+            raise ConfigError("servo search range is invalid")
+        if not cfg.servo.search_min_deg <= cfg.servo.home_deg <= cfg.servo.search_max_deg:
+            raise ConfigError("servo.home_deg must be inside search range")
+        if cfg.servo.max_slew_deg_s <= 0 or not 0 < cfg.servo.search_speed_deg_s <= cfg.servo.max_slew_deg_s:
+            raise ConfigError("servo speeds are invalid")
+        if not math.isfinite(cfg.servo.max_acceleration_deg_s2) or cfg.servo.max_acceleration_deg_s2 <= 0:
+            raise ConfigError("servo acceleration must be finite and positive")
+    if not math.isfinite(cfg.servo.pan_gain_deg) or cfg.servo.pan_gain_deg <= 0 or not 0 <= cfg.servo.pan_deadband < 0.5:
         raise ConfigError("P control settings are invalid")
-    if cfg.servo.pan_direction not in {-1, 0, 1}:
+    if type(cfg.servo.pan_direction) is not int or cfg.servo.pan_direction not in {-1, 0, 1}:
         raise ConfigError("servo.pan_direction must be -1, 0, or 1")
+    if type(cfg.servo.tilt_direction) is not int or cfg.servo.tilt_direction not in {-1, 0, 1}:
+        raise ConfigError("servo.tilt_direction must be -1, 0, or 1")
+    if cfg.servo.protocol != "pelco_d":
+        if (type(cfg.servo.pan_channel) is not int or type(cfg.servo.tilt_channel) is not int
+                or {cfg.servo.pan_channel, cfg.servo.tilt_channel} != {0, 1}):
+            raise ConfigError("pan_channel and tilt_channel must be distinct 0/1 channels")
+        if not (0 <= cfg.servo.tilt_min_deg < cfg.servo.tilt_max_deg <= 180
+                and cfg.servo.tilt_min_deg <= cfg.servo.tilt_home_deg <= cfg.servo.tilt_max_deg):
+            raise ConfigError("servo tilt limits/home are invalid")
+    for name, maximum in (("pelco_address", 255), ("pelco_pan_speed", 63), ("pelco_tilt_speed", 63)):
+        value = getattr(cfg.servo, name)
+        if type(value) is not int or not 1 <= value <= maximum:
+            raise ConfigError(f"servo.{name} must be an integer in [1, {maximum}]")
+    if cfg.servo.tilt_enabled and (cfg.servo.protocol not in {"m0_pulse", "pelco_d"} or cfg.servo.tilt_direction == 0):
+        raise ConfigError("tilt requires m0_pulse or pelco_d and a calibrated direction")
     for name, value in (
         ("chasing", cfg.tracking.chasing_threshold),
         ("takeoff", cfg.tracking.takeoff_threshold),
@@ -338,7 +396,11 @@ def validate_config(cfg: AppConfig) -> None:
         raise ConfigError("zoom speed settings are invalid")
     if cfg.zoom.zoom_in_per_second <= 0 or cfg.zoom.zoom_out_per_second <= cfg.zoom.zoom_in_per_second:
         raise ConfigError("zoom must pull out faster than it pushes in")
-    if cfg.web.host not in {"127.0.0.1", "::1", "localhost"}:
+    if cfg.web.h264_preview and cfg.camera.preview_fps != 10:
+        raise ConfigError("H.264 preview currently requires camera.preview_fps=10")
+    if cfg.web.h264_preview and not cfg.camera.native_display:
+        raise ConfigError("H.264 preview requires camera.native_display")
+    if cfg.web.host not in {"127.0.0.1", "::1", "localhost"} and not (cfg.web.allow_lan and cfg.web.host == "0.0.0.0"):
         raise ConfigError("web.host must remain loopback-only")
     if not 1 <= cfg.web.port <= 65535 or cfg.web.preview_stale_seconds <= 0:
         raise ConfigError("web settings are invalid")

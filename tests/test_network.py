@@ -73,3 +73,26 @@ def test_route_ipv4_requires_and_returns_selected_source() -> None:
     assert result.interface == "enP8p1s0"
     assert result.source == "192.0.2.10"
     assert result.gateway is None
+
+
+def test_legacy_iproute_placeholder_rows_do_not_hide_selected_address():
+    output = [{"addr_info": [{}]}, {"ifname": "eth0", "addr_info": [
+        {"family": "inet", "scope": "global", "local": "192.0.2.1",
+         "broadcast": "192.0.2.255", "prefixlen": 24}]}, {"addr_info": [{}]}]
+    assert interface_ipv4("eth0", executor=lambda _: _result(json.dumps(output))).address == "192.0.2.1"
+    with pytest.raises(NetworkInterfaceError):
+        interface_ipv4("wlan0", executor=lambda _: _result(json.dumps(output)))
+
+
+def test_legacy_text_route_preserves_source_and_gateway():
+    output = "192.0.2.44 via 198.51.100.1 dev wlan0 src 198.51.100.2 uid 1000\n    cache\n"
+    route = route_ipv4("192.0.2.44", executor=lambda _: _result(output))
+    assert (route.interface, route.source, route.gateway) == ("wlan0", "198.51.100.2", "198.51.100.1")
+    assert route_interface("192.0.2.44", executor=lambda _: _result(output)) == "wlan0"
+
+
+@pytest.mark.parametrize("output", ["", "192.0.2.45 dev eth0 src 192.0.2.1",
+    "192.0.2.44 dev eth0", "192.0.2.44 dev eth0 src 192.0.2.1 dev wlan0"])
+def test_legacy_text_route_rejects_incomplete_or_ambiguous_results(output):
+    with pytest.raises(NetworkInterfaceError):
+        route_ipv4("192.0.2.44", executor=lambda _: _result(output))

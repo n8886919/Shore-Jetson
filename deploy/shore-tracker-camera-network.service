@@ -1,5 +1,5 @@
 [Unit]
-Description=Activate the dedicated Shore Tracker camera Ethernet profile
+Description=Activate the dedicated Shore Jetson camera Ethernet profile
 After=NetworkManager.service NetworkManager-wait-online.service
 Wants=NetworkManager-wait-online.service
 Requires=NetworkManager.service

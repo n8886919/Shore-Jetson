@@ -78,7 +78,7 @@ def test_zero_faces_right_and_direction_is_fixed():
     for now in (.3,.4,.5): process_and_control(coordinator, [observation(.8,takeoff=.9)],now=now)
     assert commands[-1] < 90
     with pytest.raises(ValueError, match="固定"):
-        coordinator.update_tuning(pan_gain_deg=45, pan_deadband=.04, pan_direction=1, zoom_maximum=2.5)
+        coordinator.update_tuning(pan_gain_deg=45, pan_deadband=.125, pan_direction=1, zoom_maximum=2.5)
 
 
 def test_action_scores_visible_before_lock_and_when_disarmed():
@@ -257,6 +257,30 @@ def test_real_control_thread_moves_between_frames_and_joins():
     assert len(commands) == size
 
 
+def test_fifty_hz_motion_stays_smooth_with_two_hz_inference():
+    def run(frame_every_ticks):
+        status=ready_status();commands=[]
+        coordinator=TrackingCoordinator(replace(TrackingConfig(),candidate_hold_seconds=0),
+            replace(ServoConfig(),pan_direction=1,send_hz=50,max_slew_deg_s=5,
+                    max_acceleration_deg_s2=10),status,commands.append)
+        for now in (0,.05,.10):coordinator.process_frame([observation(.8)],now=now)
+        for now in (.15,.20,.25):coordinator.process_frame([observation(.8,takeoff=.9)],now=now)
+        for tick in range(101):
+            now=.25+tick*.02
+            if tick%frame_every_ticks==0:
+                coordinator.process_frame([observation(.8,takeoff=.9)],now=now)
+            coordinator.control_step(now=now)
+        return commands
+    two_fps,ten_fps=run(25),run(5)
+    assert two_fps == pytest.approx(ten_fps)
+    assert len(two_fps)==101
+    speeds=[(b-a)/.02 for a,b in zip(two_fps,two_fps[1:])]
+    assert all(0<v<=5+1e-8 for v in speeds)
+    assert all(abs(b-a)<=10*.02+1e-8 for a,b in zip(speeds,speeds[1:]))
+    # Every intervening tick moves; there are no 500-ms holds awaiting inference.
+    assert all(b>a for a,b in zip(two_fps,two_fps[1:]))
+
+
 def test_stop_callback_does_not_wait_for_control_lock():
     import threading
     coordinator = TrackingCoordinator(TrackingConfig(),replace(ServoConfig(),pan_direction=-1),ready_status(),lambda angle: None)
@@ -270,3 +294,20 @@ def test_stop_callback_does_not_wait_for_control_lock():
         returned_without_control_lock = completed.wait(.3)
     thread.join(timeout=1)
     assert returned_without_control_lock
+
+
+@pytest.mark.parametrize('deadband', [.05, .125, .4])
+def test_tolerance_total_percent_accepts_ten_to_eighty(deadband):
+    status=StatusStore()
+    c=TrackingCoordinator(TrackingConfig(),replace(ServoConfig(),pan_direction=-1),status,lambda angle:None)
+    c.update_tuning(pan_gain_deg=45,pan_deadband=deadband,pan_direction=-1,zoom_maximum=1)
+    assert c.planner.config.deadband == deadband
+    assert c.tilt_planner.config.deadband == deadband
+    assert status.snapshot()['tuning']['pan_deadband'] == deadband
+
+
+@pytest.mark.parametrize('deadband', [.049, .401, -1, float('nan')])
+def test_tolerance_rejects_values_outside_total_percent_range(deadband):
+    c=TrackingCoordinator(TrackingConfig(),replace(ServoConfig(),pan_direction=-1),StatusStore(),lambda angle:None)
+    with pytest.raises(ValueError,match='10%–80%'):
+        c.update_tuning(pan_gain_deg=45,pan_deadband=deadband,pan_direction=-1,zoom_maximum=1)

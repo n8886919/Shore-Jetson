@@ -1,4 +1,6 @@
-# Initial Jetson deployment profile. Secrets are supplied only through the
+# HISTORICAL native-UART PWM profile; current CH340G needs its verified USB path.
+# See docs/legacy-m0-controller.md and the current docs/servo-controller.md.
+# Secrets are supplied only through the
 # root-readable EnvironmentFile referenced by the systemd unit.
 data_dir = "/var/lib/shore-tracker"
 
@@ -11,7 +13,7 @@ codec = "h265"
 latency_ms = 250
 
 [inference]
-max_fps = 2.0
+max_fps = 0.0
 enabled = true
 backend = "tensorrt"
 detector_model = "/var/lib/shore-tracker/models/surfer_fcos_raw.onnx"
@@ -31,9 +33,11 @@ record_audio = false
 # operator clicks ARM. Initial field direction can be reversed in the UI only
 # while stopped.
 enabled = true
-# GXServo 42 kg / 180 degrees on the external controller M0 output.
+# Historical GXServo 42 kg / 180-degree assembly with the old M0 controller.
 transport = "serial"
 protocol = "m0_pulse"
+pan_channel = 0 # Owner confirmed: horizontal M0, 2026-11-14.
+tilt_channel = 1 # Vertical M1.
 serial_device = "/dev/ttyTHS1"
 serial_baud = 9600
 send_hz = 20
@@ -45,7 +49,7 @@ home_deg = 90.0
 max_slew_deg_s = 30.0
 search_speed_deg_s = 8.0
 pan_gain_deg = 45.0
-pan_deadband = 0.04
+pan_deadband = 0.20
 pan_direction = -1
 
 [tracking]
@@ -69,5 +73,5 @@ zoom_out_per_second = 4.0
 
 [web]
 host = "127.0.0.1"
-port = 8090
+port = 80
 preview_stale_seconds = 2.0

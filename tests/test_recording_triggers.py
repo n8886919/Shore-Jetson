@@ -108,3 +108,56 @@ def test_failed_recording_retries_with_backoff_and_no_new_user_action():
     now[0] += 4
     controller.follow(decision(), now[0]); controller.check_once()
     assert len(recorder.calls) == 2
+
+
+def test_continuous_waits_for_arm_and_records_through_search_loss_and_finish():
+    recorder,c,now,armed=setup();armed[0]=False
+    assert c.set_continuous(True)[0]
+    c.check_once();assert recorder.calls == []
+    assert c.snapshot()['continuous_enabled'] and not c.snapshot()['continuous_requested']
+    armed[0]=True;c.check_once();c.check_once()
+    assert recorder.calls == [('start',{'trigger':'continuous','target_track_id':None})]
+    for state in (FollowState.SEARCHING,FollowState.CHASING,FollowState.FINISHED):
+        c.follow(decision(state),now[0]);c.check_once()
+    now[0]+=10;c.check_once();assert len(recorder.calls)==1
+    armed[0]=False;c.cancel_tracking();c.check_once()
+    assert recorder.calls[-1][0]=='stop' and not c.snapshot()['continuous_requested']
+
+
+def test_disabling_continuous_returns_to_automatic_without_cutting_active_chase():
+    recorder,c,now,armed=setup()
+    c.set_continuous(True);c.check_once()
+    c.follow(decision(FollowState.CHASING),now[0]);c.set_continuous(False);c.check_once()
+    assert len(recorder.calls)==1 and c.snapshot()['tracking_requested']
+    c.follow(decision(FollowState.FINISHED),now[0]);c.check_once()
+    assert recorder.calls[-1][0]=='stop'
+    assert ('continuous',) in recorder.notes
+
+
+def test_continuous_preference_survives_restart_without_starting_disarmed(tmp_path):
+    path=tmp_path/'recording-settings.json'
+    r=Recorder();c=RecordingTriggers(r,armed_reader=lambda:False,settings_path=path)
+    assert c.set_continuous(True)[0]
+    r2=Recorder();r2.recover=lambda:None
+    restored=RecordingTriggers(r2,armed_reader=lambda:False,settings_path=path)
+    try:
+        restored.recover();restored.check_once()
+        assert restored.snapshot()['continuous_enabled']
+        assert r2.calls == []
+    finally: restored.close()
+
+
+def test_failed_preference_write_does_not_change_mode(tmp_path,monkeypatch):
+    from pathlib import Path
+    r=Recorder();c=RecordingTriggers(r,armed_reader=lambda:True,settings_path=tmp_path/'settings.json')
+    def fail(*args): raise OSError('read only')
+    monkeypatch.setattr(Path,'replace',fail)
+    assert not c.set_continuous(True)[0]
+    assert not c.snapshot()['continuous_enabled'] and r.calls == []
+
+
+def test_continuous_rejects_non_boolean_settings():
+    recorder,c,now,armed=setup()
+    for value in (1,0,None,'true'):
+        assert not c.set_continuous(value)[0]
+    assert recorder.calls == [] and not c.snapshot()['continuous_enabled']

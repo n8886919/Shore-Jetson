@@ -163,3 +163,22 @@ def test_qualified_or_manual_overlap_is_preserved(tmp_path,manual):
     assert item['state']=='ready'
     assert rec.file(item['id']).is_file()
     assert item['qualified'] is not manual
+
+
+def test_continuous_clip_is_kept_without_any_qualifying_surfer(tmp_path):
+    rec=recorder(tmp_path)
+    rec.command('start',trigger='continuous');wait_for(rec,{'recording'})
+    rec.command('stop');wait_for(rec,{'idle'})
+    item=rec.recordings()[0]
+    assert item['state']=='ready' and not item['qualified']
+    assert item['triggers']==['continuous'] and rec.file(item['id']).is_file()
+
+
+def test_enabling_continuous_during_unqualified_trial_preserves_that_clip(tmp_path):
+    rec=recorder(tmp_path)
+    rec.command('start',trigger='tracking');wait_for(rec,{'recording'})
+    rec.note_trigger('continuous')
+    rec.command('stop');wait_for(rec,{'idle'})
+    item=rec.recordings()[0]
+    assert item['state']=='ready' and not item['qualified']
+    assert set(item['triggers'])=={'tracking','continuous'}

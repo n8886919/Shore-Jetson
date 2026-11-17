@@ -64,7 +64,7 @@ def main():
     status = OfflineStatus()
     for component in status.COMPONENTS:
         status.update_component(component, 'offline', '離線預覽')
-    status.update_tuning(pan_gain_deg=45, pan_deadband=.04, pan_direction=-1, zoom_maximum=1)
+    status.update_tuning(pan_gain_deg=45, pan_deadband=.20, pan_direction=-1, zoom_maximum=1)
     server = make_server(('127.0.0.1', args.port), status, AppController(status), PreviewStore())
     server.RequestHandlerClass = OfflineHandler
     url = f'http://127.0.0.1:{server.server_port}'

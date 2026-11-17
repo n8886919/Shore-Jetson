@@ -19,6 +19,7 @@ from shore_tracker.inference.types import (
 DETECTOR_WIDTH = 896
 DETECTOR_HEIGHT = 512
 ACTION_SIZE = 160
+MAX_CANDIDATES = 10
 FEATURE_LEVELS = (
     (64, 112, 8),
     (32, 56, 16),
@@ -40,7 +41,7 @@ def _sigmoid(values: np.ndarray) -> np.ndarray:
 def prepare_detector_input(image: Image.Image) -> tuple[np.ndarray, int, int]:
     """Top-left letterbox exactly as the exported detector contract specifies."""
 
-    rgb = image.convert("RGB")
+    rgb = image if image.mode == "RGB" else image.convert("RGB")
     scale = min(DETECTOR_WIDTH / rgb.width, DETECTOR_HEIGHT / rgb.height)
     width = max(1, min(DETECTOR_WIDTH, int(round(rgb.width * scale))))
     height = max(1, min(DETECTOR_HEIGHT, int(round(rgb.height * scale))))
@@ -70,7 +71,7 @@ def decode_fcos_outputs(
     resized_height: int,
     score_threshold: float,
     nms_threshold: float = 0.60,
-    limit: int = 20,
+    limit: int = MAX_CANDIDATES,
 ) -> tuple[RawDetection, ...]:
     cls = np.asarray(outputs["cls_logits"], dtype=np.float32).reshape(-1)
     boxes = np.asarray(outputs["bbox_regression"], dtype=np.float32).reshape(-1, 4)
@@ -122,7 +123,7 @@ def decode_fcos_outputs(
 def prepare_action_input(
     image: Image.Image, detections: tuple[RawDetection, ...]
 ) -> np.ndarray:
-    rgb = image.convert("RGB")
+    rgb = image if image.mode == "RGB" else image.convert("RGB")
     crops: list[np.ndarray] = []
     for detection in detections:
         box = detection.box
@@ -247,6 +248,7 @@ class TensorRtRunner:
         self.trt: Any = None
         self.engine: Any = None
         self.context: Any = None
+        self.runtime: Any = None
 
     def load(self) -> None:
         try:
@@ -255,6 +257,7 @@ class TensorRtRunner:
             raise TensorRtUnavailable("TensorRT Python bindings are unavailable") from exc
         self.trt = trt
         logger = trt.Logger(trt.Logger.WARNING)
+        trt.init_libnvinfer_plugins(logger, "")
         serialized: bytes | None = None
         if self.engine_path.is_file():
             serialized = self.engine_path.read_bytes()
@@ -262,8 +265,8 @@ class TensorRtRunner:
             serialized = self._build(logger)
             self.engine_path.parent.mkdir(parents=True, exist_ok=True)
             self.engine_path.write_bytes(serialized)
-        runtime = trt.Runtime(logger)
-        self.engine = runtime.deserialize_cuda_engine(serialized)
+        self.runtime = trt.Runtime(logger)
+        self.engine = self.runtime.deserialize_cuda_engine(serialized)
         if self.engine is None:
             raise TensorRtUnavailable("TensorRT engine could not be loaded")
         self.context = self.engine.create_execution_context()
@@ -281,7 +284,12 @@ class TensorRtRunner:
             detail = str(parser.get_error(0)) if parser.num_errors else "unknown parser error"
             raise TensorRtUnavailable(f"ONNX parse failed: {detail}")
         config = builder.create_builder_config()
-        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)
+        if hasattr(config, "set_memory_pool_limit"):
+            config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)
+        else:
+            # JetPack 4 / TensorRT 8.2: leave room for the desktop and decoder
+            # on the 4 GB Nano while selecting tactics for each layer.
+            config.max_workspace_size = 1 << 28
         if builder.platform_has_fast_fp16:
             config.set_flag(trt.BuilderFlag.FP16)
         if self.dynamic_batch:
@@ -303,6 +311,8 @@ class TensorRtRunner:
         if self.engine is None or self.context is None:
             raise RuntimeError("TensorRT runner is not loaded")
         self.cuda.make_current()
+        if not hasattr(self.engine, "num_io_tensors"):
+            return self._infer_bindings(input_array)
         trt = self.trt
         names = [self.engine.get_tensor_name(i) for i in range(self.engine.num_io_tensors)]
         inputs = [
@@ -341,6 +351,51 @@ class TensorRtRunner:
             for pointer in device.values():
                 self.cuda.free(pointer)
         return {name: host[name] for name in names if name != input_name}
+
+    def _infer_bindings(self, input_array: np.ndarray) -> dict[str, np.ndarray]:
+        """TensorRT 8.2 explicit-batch API used by JetPack 4 on Nano."""
+        engine, context, trt = self.engine, self.context, self.trt
+        indices = range(engine.num_bindings)
+        inputs = [i for i in indices if engine.binding_is_input(i)]
+        if len(inputs) != 1 or engine.has_implicit_batch_dimension:
+            raise TensorRtUnavailable("model must have one explicit-batch input")
+        if any(engine.is_shape_binding(i) for i in indices):
+            raise TensorRtUnavailable("shape bindings are unsupported")
+        input_index = inputs[0]
+        contiguous = np.ascontiguousarray(
+            input_array, dtype=trt.nptype(engine.get_binding_dtype(input_index))
+        )
+        if not context.set_binding_shape(input_index, contiguous.shape):
+            raise TensorRtUnavailable("TensorRT rejected the input shape")
+        host = {input_index: contiguous}
+        for i in indices:
+            if i == input_index:
+                continue
+            shape = tuple(context.get_binding_shape(i))
+            if any(dimension <= 0 for dimension in shape):
+                raise TensorRtUnavailable("TensorRT output shape is unresolved")
+            host[i] = np.empty(shape, dtype=trt.nptype(engine.get_binding_dtype(i)))
+        bindings = [0] * engine.num_bindings
+        try:
+            for i in indices:
+                bindings[i] = self.cuda.allocate(host[i].nbytes)
+            self.cuda.copy_to_device(bindings[input_index], contiguous)
+            if not context.execute_async_v2(
+                bindings=bindings, stream_handle=self.cuda.stream.value
+            ):
+                raise TensorRtUnavailable("TensorRT execution failed")
+            for i in indices:
+                if i != input_index:
+                    self.cuda.copy_from_device(host[i], bindings[i])
+        finally:
+            # Complete outstanding transfers even when enqueue/copy fails.
+            try:
+                self.cuda.synchronize()
+            finally:
+                for pointer in bindings:
+                    if pointer:
+                        self.cuda.free(pointer)
+        return {engine.get_binding_name(i): host[i] for i in indices if i != input_index}
 
 
 class TensorRtSurfTrackModels:
@@ -383,6 +438,12 @@ class TensorRtSurfTrackModels:
             raise RuntimeError("models are not loaded")
         with Image.open(io.BytesIO(jpeg)) as source:
             image = source.convert("RGB")
+        return self.infer_image(image)
+
+    def infer_image(self, image: Image.Image) -> tuple[TrackObservation, ...]:
+        """Accept a decoded frame without a lossy JPEG round trip."""
+        if self.detector is None or self.action is None:
+            raise RuntimeError("models are not loaded")
         detector_input, resized_width, resized_height = prepare_detector_input(image)
         raw = decode_fcos_outputs(
             self.detector.infer(detector_input),

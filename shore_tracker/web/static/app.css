@@ -118,3 +118,15 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--cyan); outline-
 
 .bbox-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; z-index: 1; }
 .bbox-overlay text { font: 11px system-ui, sans-serif; }
+
+.recording-mode.switch-row { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:12px; }
+.ios-switch { position: relative; display: inline-block; flex: 0 0 50px; width: 50px; height: 30px; }
+.ios-switch input[type="checkbox"] { position: absolute; inset: 0; z-index: 1; width: 50px; height: 30px; margin: 0; opacity: 0; cursor: pointer; }
+.switch-track { display: block; width: 50px; height: 30px; border-radius: 15px; background: #4b4f54; transition: background .1s ease; }
+.switch-track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0004; transition: transform .1s ease; }
+.ios-switch input:checked + .switch-track { background: #34c759; }
+.ios-switch input:checked + .switch-track::after { transform: translateX(20px); }
+.ios-switch input:focus-visible + .switch-track { outline: 2px solid #b8e9d9; outline-offset: 3px; }
+.ios-switch input:disabled { cursor: default; }
+.ios-switch input:disabled + .switch-track { opacity: .45; }
+@media (prefers-reduced-motion: reduce) { .switch-track, .switch-track::after { transition: none; } }

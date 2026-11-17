@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Apply this bounded Shore Tracker release; preserve the existing installation."""
+"""Historical kiosk updater with GXServo/M0-specific controller checks.
+
+This helper does not integrate RS485 雲台. See docs/servo-controller.md before
+selecting a separately authorized deployment; preserve the existing installation.
+"""
 import argparse
 import copy
 import hashlib

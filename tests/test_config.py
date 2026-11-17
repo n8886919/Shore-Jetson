@@ -10,9 +10,29 @@ def test_default_config_is_simple_local_mkv_and_tensorrt() -> None:
     validate_config(config)
     assert config.inference.backend == "tensorrt"
     assert config.recording.record_audio is False
+    assert config.web.port == 80
+    assert config.servo.protocol == 'm0_pulse'  # Omitted protocol retains old configs.
+    assert config.servo.serial_baud == 9600
     assert not hasattr(config, "drive")
     assert not hasattr(config.servo, "expected_profile_crc")
     assert not hasattr(config.servo, "host_ack_timeout_ms")
+
+
+def test_web_port_defaults_to_http_and_preserves_explicit_ports(tmp_path):
+    path = tmp_path / 'config.toml'
+    path.write_text('')
+    assert load_config(path).web.port == 80
+    for port in (80, 8090, 18092):
+        path.write_text(f'[web]\nport={port}\n')
+        assert load_config(path).web.port == port
+
+
+@pytest.mark.parametrize('name', [
+    'example.toml', 'jetson-disarmed.toml', 'jetson-nano.toml',
+    'jetson-m0-uart.toml', 'jetson-staging-live.example.toml',
+])
+def test_supplied_profiles_use_http_port(name):
+    assert load_config(Path('config') / name).web.port == 80
 
 
 def test_load_rejects_removed_drive_and_servo_session_fields(tmp_path: Path) -> None:
@@ -26,13 +46,16 @@ def test_load_rejects_removed_drive_and_servo_session_fields(tmp_path: Path) -> 
         load_config(path)
 
 
-def test_deployment_config_loads() -> None:
+def test_deployment_config_selects_rs485_but_waits_for_calibration() -> None:
     config = load_config(Path("config/jetson-disarmed.toml"))
     assert config.zoom.maximum == 2.5
     assert config.servo.transport == "serial"
-    assert config.servo.serial_baud == 115200
-    assert config.servo.enabled is True
-    assert config.servo.pan_direction == -1
+    assert config.servo.serial_baud == 9600
+    assert config.servo.protocol == 'pelco_d'
+    assert config.servo.enabled is False
+    assert config.servo.pan_direction == 0
+    assert config.servo.pelco_address == 1
+    assert config.servo.pelco_pan_speed == 8
 
 
 def test_legacy_udp_config_requires_explicit_uart_migration(tmp_path):
@@ -53,15 +76,15 @@ def test_legacy_serial_config_keeps_its_device_and_ignores_udp_fields(tmp_path):
 
 @pytest.mark.parametrize("setting, field", [
     ('transport="udp"', "transport"),
-    ('serial_baud=9600', "serial_baud"),
+    ('serial_baud=115200', "serial_baud"),
     ('send_hz=4', "send_hz"),
-    ('send_hz=21', "send_hz"),
+    ('send_hz=51', "send_hz"),
     ('angle_min_deg=-1', "angle limits"),
     ('angle_max_deg=181', "angle limits"),
 ])
 def test_uart_config_rejects_incompatible_settings(tmp_path, setting, field):
     path = tmp_path / "config.toml"
-    path.write_text(f"[servo]\n{setting}\n")
+    path.write_text(f'[servo]\nprotocol="m0_pulse"\n{setting}\n')
     with pytest.raises(ConfigError, match=field):
         load_config(path)
 
@@ -108,12 +131,20 @@ def test_legacy_loss_timeout_cannot_override_shared_grace(tmp_path):
     assert not hasattr(config.tracking, "lost_grace_seconds")
 
 
-def test_inference_rate_defaults_to_two_and_is_independent_of_preview(tmp_path):
+def test_inference_rate_defaults_to_unlimited_and_is_independent_of_preview(tmp_path):
     path=tmp_path/'rate.toml';path.write_text('[camera]\npreview_fps=20\n')
     config=load_config(path)
-    assert config.inference.max_fps==2
+    assert config.inference.max_fps==0
     path.write_text('[inference]\nmax_fps=5\n')
     assert load_config(path).inference.max_fps==5
-    for value in ('0','11','true','nan','inf'):
+    for value in ('-1','.5','11','true','nan','inf'):
         path.write_text('[inference]\nmax_fps='+value+'\n')
         with pytest.raises(ConfigError):load_config(path)
+
+
+def test_tolerance_default_is_twenty_five_percent_total(tmp_path):
+    from shore_tracker.status import StatusStore
+    path=tmp_path/'empty.toml';path.write_text('')
+    assert AppConfig().servo.pan_deadband == .20
+    assert load_config(path).servo.pan_deadband == .20
+    assert StatusStore().snapshot()['tuning']['pan_deadband'] == .20
