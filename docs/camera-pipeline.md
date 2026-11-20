@@ -46,6 +46,12 @@ The low-level pipeline builder retains its segmented-sink compatibility code, bu
 the application runtime never selects it. Authenticated decode, reconnect behaviour
 and event recording still require a Jetson field canary.
 
+If format negotiation fails, compare the codec advertised by the camera profile
+with the one in the stream's SDP and the caps negotiated by the decoder.
+Check that decoded frames keep advancing. If preview and event recording each
+work alone, test them together with the same input and decode a finalized clip.
+For a camera overlay change, read the setting back and check its effect on a fresh frame.
+
 ## Independent preview and inference rates
 
 `camera.preview_fps` controls the JPEG preview cap independently (default 20, configurable 1–60). `videorate` only drops excess frames; it cannot manufacture more camera frames. Encoded MKV recording retains the source stream and does not use the preview cap.
@@ -53,3 +59,7 @@ and event recording still require a Jetson field canary.
 The camera publishes only the newest JPEG into a bounded store. The MJPEG client and the inference worker consume it independently; a slow inference call does not hold the producer lock or queue old frames. Increasing preview FPS may increase JPEG CPU cost and network usage, so 20 FPS is a configured cap pending Jetson measurement.
 
 The UI shows preview production FPS and completed inference FPS separately. Preview FPS is measured over recent published JPEGs, resets on camera-session changes, and becomes unavailable when frames are stale. It does not measure browser receive/render FPS or the raw RTSP frame rate.
+
+To measure camera-to-screen delay, place a running timer in the camera's field
+of view. Photograph the timer and its displayed preview together and compare
+the readings. Repeat across several frames to capture variation.
