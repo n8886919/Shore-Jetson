@@ -54,8 +54,8 @@ class PwmServoTest:
                 ('center', '兩舵機置中：水平 90°、垂直 90°', 90., 90., 1.),
                 ('left', '水平向左轉 20°', 90 - 20 * self.pan_direction, 90., self._duration(20)),
                 ('right', '水平向右轉 40°', right, 90., self._duration(40)),
-                ('up', '抬頭 40°', right, 90 - 40 * self.tilt_direction, self._duration(40)),
-                ('down', '低頭 40°，垂直回中', right, 90., self._duration(40)),
+                ('up', '抬頭 20°', right, 90 - 20 * self.tilt_direction, self._duration(20)),
+                ('down', '低頭 20°，垂直回中', right, 90., self._duration(20)),
             ]
             now = self.clock()
             self._started = self._phase_started = now

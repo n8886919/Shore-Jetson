@@ -56,7 +56,8 @@ class IoUTracker:
         self._next_id = 1
         self._last_now = None
 
-    def update(self, detections: Iterable[RawDetection], *, now: float | None = None) -> tuple[DetectionPrediction, ...]:
+    def update(self, detections: Iterable[RawDetection], *, now: float | None = None,
+               position_hint: tuple[int, NormalizedBox] | None = None) -> tuple[DetectionPrediction, ...]:
         now = self.clock() if now is None else now
         if not isfinite(now) or (self._last_now is not None and now < self._last_now):
             raise ValueError("tracker time must be finite and monotonic")
@@ -69,7 +70,8 @@ class IoUTracker:
                 del self._tracks[track_id]
         candidates = sorted(
             (
-                (box_iou(track.box, detection.box), track_id, index)
+                (box_iou(position_hint[1] if position_hint and position_hint[0] == track_id
+                         else track.box, detection.box), track_id, index)
                 for track_id, track in self._tracks.items()
                 for index, detection in enumerate(found)
             ),

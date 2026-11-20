@@ -95,7 +95,7 @@ class ManualRecording:
             detail = self._detail
             if self._id and self._state == 'idle':
                 try:
-                    data = json.loads((self.root / self._id / 'recording.json').read_text())
+                    data = self._recording_metadata(self.root / self._id / 'recording.json')
                     detail = {'pending': '影片已完成，等待傳送到 SurfTrack', 'uploading': '影片傳送中',
                               'uploaded': '影片已上傳私人 Google Drive', 'failed': '上傳未完成，保留原檔等待重試'}.get(data['upload_state'], detail)
                 except (OSError, ValueError, KeyError): pass
@@ -191,18 +191,6 @@ class ManualRecording:
             if clip is not None:
                 try: clip.abort()
                 except Exception: pass
-            # Only this new, automatic, never-qualified event may be deleted.
-            # Manual or continuous overlap always preserves the clip.
-            if not {'manual', 'continuous'}.intersection(data.get('triggers', [])) and not data.get('qualified'):
-                try:
-                    partial.unlink(missing_ok=True)
-                    (directory / 'clip.mkv').unlink(missing_ok=True)
-                    data.update(state='discarded', size_bytes=0, upload_state='not_applicable',
-                                detail='未發展成起乘／衝浪，試拍影片已刪除')
-                    data.pop('sha256', None)
-                except OSError:
-                    failed = True
-                    data.update(state='failed', detail='試拍影片刪除未完成，請檢查儲存空間')
             data['ended_at'] = datetime.now(timezone.utc).isoformat()
             try: atomic_json(directory / 'recording.json', data)
             finally:
@@ -210,6 +198,16 @@ class ManualRecording:
                     self._state = 'failed' if failed else 'idle'
                     self._started = None
                     self._detail = data.get('detail', '影片已完成，等待傳送到 SurfTrack')
+            if data['state'] == 'ready':
+                try:
+                    wake = self.root / '.backup-wake'
+                    wake.mkdir(mode=0o700, exist_ok=True)
+                    (wake / data['id']).touch(mode=0o600)
+                except OSError:
+                    # The finalized clip remains discoverable at startup or the next wake.
+                    import logging
+                    logging.getLogger(__name__).exception('Could not notify recording backup')
+
 
     def close(self):
         with self._lock:
@@ -218,20 +216,28 @@ class ManualRecording:
             thread = self._thread
         if thread: thread.join(timeout=20)
 
+    @staticmethod
+    def _recording_metadata(path):
+        data = json.loads(path.read_text())
+        if (data.get('state') == 'ready' and not path.with_name('clip.mkv').exists()
+                and path.with_name('drive-backup.json').is_file()):
+            data.update(state='archived', upload_state='uploaded')
+        return data
+
     def recordings(self):
         items = []
         for path in sorted(self.root.glob('*/recording.json'), reverse=True):
             if not RECORDING_ID.fullmatch(path.parent.name): continue
             try:
-                data = json.loads(path.read_text())
-                if data['state'] in {'ready', 'failed', 'discarded'}: items.append(data)
+                data = self._recording_metadata(path)
+                if data['state'] in {'ready', 'failed', 'discarded', 'archived'}: items.append(data)
             except (OSError, ValueError, KeyError): continue
         return items
 
     def file(self, recording_id):
         if not RECORDING_ID.fullmatch(recording_id): raise ValueError('invalid id')
         directory = self.root / recording_id
-        data = json.loads((directory / 'recording.json').read_text())
+        data = self._recording_metadata(directory / 'recording.json')
         if data['state'] != 'ready': raise ValueError('not finalized')
         path = directory / 'clip.mkv'
         if path.is_symlink() or directory.is_symlink(): raise ValueError('invalid path')

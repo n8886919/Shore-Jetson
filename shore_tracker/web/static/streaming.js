@@ -1,4 +1,4 @@
-// Prefer hardware H.264/WebRTC on the LAN; retain JPEG on failure.
+// Prefer hardware H.265/WebRTC on the LAN; retain JPEG on failure.
 (() => {
   const video = document.getElementById('rtcStream');
   if (!video) return;
@@ -25,7 +25,12 @@
       if (revision !== generation) return;
       peer = new RTCPeerConnection({iceServers:[]});
       const current = peer;
-      current.addTransceiver('video',{direction:'recvonly'});
+      const receiver = current.addTransceiver('video',{direction:'recvonly'});
+      if (receiver?.setCodecPreferences && typeof RTCRtpReceiver !== 'undefined') {
+        const hevc = RTCRtpReceiver.getCapabilities?.('video')?.codecs.filter(
+          codec => codec.mimeType.toLowerCase() === 'video/h265');
+        if (hevc?.length) receiver.setCodecPreferences(hevc);
+      }
       current.ontrack = event => {
         if (current !== peer) return;
         video.srcObject = new MediaStream([event.track]);
@@ -46,7 +51,14 @@
           video.requestVideoFrameCallback(frame);
         }
       };
-      await current.setLocalDescription(await current.createOffer());
+      const offer = await current.createOffer();
+      if (current !== peer) return;
+      if (!/^a=rtpmap:\d+ H265\/90000\s*$/im.test(offer.sdp)) {
+        reset();
+        return;
+      }
+      await current.setLocalDescription(offer);
+      if (current !== peer) return;
       const reply = await fetch('/api/stream/webrtc',{method:'POST',
         headers:{'Content-Type':'application/sdp'},body:current.localDescription.sdp,
         signal:AbortSignal.timeout(10000)});

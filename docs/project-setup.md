@@ -142,3 +142,17 @@ the local camera skill specified in `AGENTS.md`; obtain it before that work.
 Raw media, model artifacts, build output and publication backups are excluded by
 `.gitignore`. Review both file contents and the intended diff before any separately
 authorized publication; an ignore rule does not remove already tracked content.
+
+### Requested local recording
+
+The preview pipeline does not write background video segments. Local clips start
+only through manual, automatic-following or ARM-session continuous triggers.
+Existing recordings remain on the video card.
+
+
+### Tailscale Web access
+
+With `[web] allow_lan = true`, the dashboard also accepts clients in Tailscale's
+`100.64.0.0/10` IPv4 range. Connect using the Nano's numeric Tailscale address.
+The tailnet policy must grant the requesting device TCP 80 access to the Nano.
+Host validation and same-origin control checks apply to these connections.

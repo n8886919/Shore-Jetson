@@ -205,6 +205,12 @@ class SimpleServoClient:
         with self._lock:
             self._tilt_target = None
 
+    def pause_motion(self) -> None:
+        """Clear pending output while retaining the tracking send gate."""
+        with self._lock:
+            self._target = self._tilt_target = None
+            self._target_updated_at = None
+
     def stop_motion(self) -> None:
         with self._lock:
             self._armed = False

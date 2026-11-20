@@ -11,11 +11,12 @@ from shore_tracker.inference import FollowState
 
 class RecordingTriggers:
     def __init__(self, recorder, *, armed_reader, stale_seconds=1.5, clock=time.monotonic,
-                 settings_path=None):
+                 settings_path=None, activity_callback=None):
         self.recorder = recorder
         self.armed_reader = armed_reader
         self.stale_seconds = stale_seconds
         self.clock = clock
+        self.activity_callback = activity_callback
         self._lock = threading.RLock()
         self._manual = False
         self._continuous = False
@@ -64,6 +65,7 @@ class RecordingTriggers:
                 self.recorder.note_trigger('continuous')
             self._retry_at = 0.0
             self._error = ''
+            self._publish_activity()
         return True, '連續錄影已開啟' if enabled else '已改為自動跟拍錄影'
 
     def command(self, action):
@@ -77,6 +79,7 @@ class RecordingTriggers:
                 self.recorder.note_trigger('manual')
             self._retry_at = 0.0
             self._error = ''
+            self._publish_activity()
         return True, '手動錄影已開啟' if action == 'start' else '手動錄影已結束；自動跟拍依追蹤狀態繼續'
 
     def follow(self, decision, now):
@@ -95,12 +98,14 @@ class RecordingTriggers:
             if self._qualified and (active or was_active):
                 self.recorder.note_trigger('tracking', decision.target_track_id, qualified=True)
             self._decision_at = now
+            self._publish_activity()
 
     def cancel_tracking(self, _reason=''):
         with self._lock:
             self._target_id = None
             self._automatic = False
             self._decision_at = None
+            self._publish_activity()
 
     def stop_all(self):
         with self._lock:
@@ -108,6 +113,14 @@ class RecordingTriggers:
             self._automatic = False
             self._target_id = None
         self.recorder.command('stop')
+
+    def _publish_activity(self):
+        # Called under the trigger lock, before starting a recorder. The status
+        # lock makes forced enable and concurrent UI disable mutually exclusive.
+        if self.activity_callback is not None:
+            busy = self.recorder.snapshot()['state'] in {'starting', 'recording', 'finalizing'}
+            required = self._manual or self._automatic or (self._continuous and bool(self.armed_reader())) or busy
+            self.activity_callback(bool(required))
 
     def snapshot(self):
         with self._lock:
@@ -133,6 +146,7 @@ class RecordingTriggers:
             wanted = self._manual or self._automatic or continuous
             snapshot = self.recorder.snapshot()
             state = snapshot['state']
+            self._publish_activity()
             if state == 'failed' and snapshot.get('id') != self._failed_id:
                 self._failed_id = snapshot.get('id')
                 self._retry_at = now + 5.0

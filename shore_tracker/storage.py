@@ -17,6 +17,7 @@ class DiskStatus:
     pressure: DiskPressure
     free_bytes: int
     total_bytes: int
+    used_bytes: int | None = None
 
     @property
     def free_gib(self) -> float:
@@ -38,4 +39,4 @@ class DiskGuard:
             pressure = DiskPressure.WARNING
         else:
             pressure = DiskPressure.OK
-        return DiskStatus(pressure, usage.free, usage.total)
+        return DiskStatus(pressure, usage.free, usage.total, usage.used)

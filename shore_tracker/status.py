@@ -45,6 +45,7 @@ class StatusStore:
         self._observation_sequence = 0
         self._recognition_thresholds = {'detection': .5, 'chasing_wave': .7, 'takeoff': .65, 'surfing': .7}
         self._recognition_stale_seconds = 1.5
+        self._used_gib: float | None = None
         self._free_gib: float | None = None
         self._camera_frame_age_ms: int | None = None
         self._inference_frame_age_ms: int | None = None
@@ -67,6 +68,7 @@ class StatusStore:
         self._disarm_listeners: list[Callable[[str], None]] = []
         self._run_id = 0
         self._run_started = 0.0
+        self._inference_enabled = False
 
     def add_disarm_listener(self, callback: Callable[[str], None]) -> None:
         """Register a fail-safe callback without invoking it for boot DISARM."""
@@ -89,7 +91,8 @@ class StatusStore:
             )
             if (
                 name in {"camera", "inference", "servo"}
-                and state != "ready" and not (name == "inference" and state == "idle")
+                and state != "ready" and not (name == "inference" and (state == "idle"
+                    or (state == "stale" and not self._inference_enabled)))
             ):
                 notify = self._disarm_locked(reason)
         if notify:
@@ -99,6 +102,7 @@ class StatusStore:
         self,
         *,
         free_gib: float | None = None,
+        used_gib: float | None = None,
         camera_frame_age_ms: int | None = None,
         inference_frame_age_ms: int | None = None,
         servo_angle_deg: float | None = None,
@@ -111,6 +115,10 @@ class StatusStore:
         last_recording: str | None = None,
     ) -> None:
         with self._lock:
+            if disk_pressure == "unknown":
+                self._free_gib = self._used_gib = None
+            if used_gib is not None:
+                self._used_gib = used_gib
             if free_gib is not None:
                 self._free_gib = free_gib
             if camera_frame_age_ms is not None:
@@ -137,7 +145,7 @@ class StatusStore:
     def update_observations(self, observations, *, inference_run_id=None) -> bool:
         """Publish immutable model outputs independently of ARM/target selection."""
         with self._lock:
-            if inference_run_id is not None and (not self._tracking.armed or inference_run_id != self._run_id):
+            if inference_run_id is not None and (not self._inference_enabled or inference_run_id != self._run_id):
                 return False
             self._observations = tuple(observations)
             self._observations_received = True
@@ -278,6 +286,7 @@ class StatusStore:
             if self._tracking.mode != "arming":
                 return
             self._tracking.armed = True
+            self._inference_enabled = True  # Following requires fresh AI results.
             self._run_id += 1
             self._run_started = time.monotonic()
             self._tracking.mode = "searching"
@@ -289,7 +298,26 @@ class StatusStore:
 
     def inference_run(self):
         with self._lock:
-            return (self._run_id, self._run_started) if self._tracking.armed else None
+            return (self._run_id, self._run_started) if self._inference_enabled else None
+
+    def set_inference_enabled(self, enabled: bool) -> None:
+        if type(enabled) is not bool:
+            raise ValueError('AI 辨識設定必須為開啟或關閉')
+        with self._lock:
+            if enabled == self._inference_enabled:
+                return
+            self._run_id += 1
+            self._run_started = time.monotonic()
+            self._inference_enabled = enabled
+            self._observations = ()
+            self._observations_received = False
+            self._observations_at = None
+            self._inference_fps = 0.0
+            self._zoom_scale, self._zoom_center_x = 1.0, 0.5
+            if self._tracking.armed:
+                self._tracking = TrackingState(armed=True,
+                    mode='searching' if enabled else 'manual',
+                    reason='AI 辨識已開啟' if enabled else '方向鍵手動控制')
 
     def disarm(self, reason: str) -> None:
         notify = False
@@ -300,6 +328,8 @@ class StatusStore:
 
     def _disarm_locked(self, reason: str) -> bool:
         changed = self._tracking.armed or self._tracking.mode == "arming"
+        self._run_id += 1  # Fence GPU results from before STOP or an AI toggle.
+        self._run_started = time.monotonic()
         self._tracking.armed = False
         self._tracking.mode = "disarmed"
         self._tracking.target_track_id = None
@@ -332,12 +362,16 @@ class StatusStore:
                 },
                 "tracking": asdict(self._tracking),
                 "servo_command": dict(self._servo_command),
-                "inference_run_id": self._run_id if self._tracking.armed else None,
+                "control_epoch": self._run_id,
+                "inference_run_id": self._run_id if self._inference_enabled else None,
+                "inference": {"enabled": self._inference_enabled,
+                              "locked": False},
                 "recognition": self._recognition_snapshot(),
                 "arm_allowed": allowed,
                 "arm_reason": arm_reason,
                 "metrics": {
                     "free_gib": self._free_gib,
+                    "used_gib": self._used_gib,
                     "camera_frame_age_ms": self._camera_frame_age_ms,
                     "inference_frame_age_ms": self._inference_frame_age_ms,
                     "servo_angle_deg": self._servo_angle_deg,

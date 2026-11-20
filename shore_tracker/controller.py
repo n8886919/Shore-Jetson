@@ -22,6 +22,9 @@ class AppController:
         camera_reconnect_callback=None,
         servo_recovery_callback=None,
         inference_rate_callback=None,
+        inference_enabled_callback=None,
+        keyboard_snapshot=None,
+        keyboard_callback=None,
         pan_tilt_snapshot=None,
         pan_tilt_callback=None,
         servo_test_snapshot=None,
@@ -37,6 +40,9 @@ class AppController:
         self._camera_reconnect_callback = camera_reconnect_callback
         self._servo_recovery_callback = servo_recovery_callback
         self._servo_recovery_epoch = 0
+        self._inference_enabled_callback = inference_enabled_callback
+        self._keyboard_snapshot = keyboard_snapshot
+        self._keyboard_callback = keyboard_callback
         self._inference_rate_callback = inference_rate_callback
         self._pan_tilt_snapshot = pan_tilt_snapshot
         self._pan_tilt_callback = pan_tilt_callback
@@ -141,7 +147,7 @@ class AppController:
 
     def pan_tilt_command(self, action: str, values: dict) -> dict:
         with self._control_lock:
-            if self._pan_tilt_callback is None:
+            if self._pan_tilt_callback is None or not self.pan_tilt_snapshot().get("available"):
                 raise ValueError("雲台手動控制尚未連接")
             tracking = self.status.snapshot()["tracking"]
             active = tracking["armed"] or tracking["mode"] == "arming"
@@ -237,6 +243,29 @@ class AppController:
             except ValueError as exc:
                 return False, str(exc)
             return True, "辨識頻率已生效"
+
+    def set_inference_enabled(self, enabled: bool) -> tuple[bool, str]:
+        with self._control_lock:
+            if self.status.snapshot()['components']['inference']['state'] == 'offline':
+                return False, '辨識服務尚未就緒'
+            try:
+                if self._inference_enabled_callback is not None:
+                    self._inference_enabled_callback(enabled)
+                else:
+                    self.status.set_inference_enabled(enabled)
+            except ValueError as exc:
+                return False, str(exc)
+            return True, 'AI 辨識已開啟' if enabled else 'AI 辨識已關閉'
+
+    def keyboard_snapshot(self):
+        return self._keyboard_snapshot() if self._keyboard_snapshot else {'available': False}
+
+    def keyboard_command(self, action, values):
+        with self._control_lock:
+            if self._keyboard_callback is None:
+                raise ValueError('目前設定不支援方向鍵控制')
+            result = self._keyboard_callback(action, values)
+            return {'ok': True, 'status': self.keyboard_snapshot(), **(result or {})}
 
     def _camera_recovery_pending(self) -> bool:
         return self.diagnostics().get("recovery", {}).get("state") in {"queued", "reconnecting"}

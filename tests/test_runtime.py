@@ -1,10 +1,7 @@
 from dataclasses import replace
-from datetime import datetime, timezone
-from pathlib import Path
-
-from shore_tracker.camera import ClosedFragment
+import pytest
 from shore_tracker.config import AppConfig, RecordingConfig, ServoConfig
-from shore_tracker.runtime import ShoreTrackerRuntime, recording_pattern_for_session
+from shore_tracker.runtime import ShoreTrackerRuntime
 
 
 class Dashboard:
@@ -26,7 +23,6 @@ class Camera:
 
     def start(self):
         self.kwargs["status"].update_component("camera", "ready")
-        self.kwargs["status"].update_component("recording", "ready")
         return True
 
     def stop(self, *, timeout_seconds):
@@ -58,18 +54,16 @@ def config(tmp_path):
     )
 
 
-def test_recording_pattern_is_single_local_mkv(tmp_path: Path) -> None:
-    path = recording_pattern_for_session(tmp_path, datetime(2026, 9, 2, tzinfo=timezone.utc), "abc")
-    assert path.suffix == ".mkv"
-    assert "raw" not in path.parts
-    assert "metadata" not in path.parts
-
-
-def test_runtime_starts_poc_services_and_fragment_creates_no_sidecars(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("codec", ["h264", "h265"])
+def test_start_and_reconnect_never_record_in_background(tmp_path, monkeypatch, codec):
     Camera.instances.clear()
     monkeypatch.setenv("SHORE_TRACKER_RTSP_URI", "rtsp://user:secret@192.0.2.8/live")
+    settings = config(tmp_path)
+    settings.recording.root.mkdir(parents=True)
+    old_video = settings.recording.root / "existing.mkv"
+    old_video.write_bytes(b"existing footage")
     runtime = ShoreTrackerRuntime(
-        replace(config(tmp_path), camera=replace(config(tmp_path).camera, preview_fps=13)),
+        replace(settings, camera=replace(settings.camera, codec=codec, preview_fps=13)),
         dashboard_builder=lambda *_args, **_kwargs: Dashboard(),
         camera_builder=Camera,
         servo_service_builder=Servo,
@@ -77,17 +71,34 @@ def test_runtime_starts_poc_services_and_fragment_creates_no_sidecars(tmp_path, 
         camera_route_validator=lambda *_args: None,
         camera_retry_seconds=60,
     )
-    runtime.start_services()
-    camera = Camera.instances[0]
-    assert dict(camera.kwargs["spec"].element("preview_caps").properties)["caps"] == "video/x-raw,framerate=13/1"
-    video = Path(str(camera.kwargs["spec"].recording_pattern) % 0)
-    video.parent.mkdir(parents=True, exist_ok=True)
-    video.write_bytes(b"mkv")
-    camera.kwargs["on_fragment_closed"](ClosedFragment(video, 1, 1))
-    assert runtime.status.snapshot()["metrics"]["last_recording"] == video.name
-    assert list(video.parent.glob("*.json")) == []
-    assert list(video.parent.glob("*.jpg")) == []
-    runtime.stop_services()
+    runtime.manual_recording.recorder.builder = lambda *_args: pytest.fail("Unexpected recording")
+    try:
+        runtime.start_services()
+        camera = runtime._camera
+        assert dict(camera.kwargs["spec"].element("preview_caps").properties)["caps"] == "video/x-raw,framerate=13/1"
+        # Missing fragment progress is normal for a preview-only camera.
+        camera.recording_progress_age_seconds = 1000
+        runtime._check_camera_once()
+        assert runtime._camera is camera and not camera.stopped
+        assert runtime.controller.reconnect_camera()[0]
+        runtime._check_camera_once()
+        assert camera.stopped and runtime._camera is not camera
+        # An error recovery also rebuilds only the preview branch.
+        runtime._camera.terminal_kind = "error"
+        runtime._check_camera_once()
+        for instance in Camera.instances:
+            spec = instance.kwargs["spec"]
+            assert spec.recording_pattern is None
+            assert {e.factory for e in spec.elements}.isdisjoint({"splitmuxsink", "filesink"})
+        runtime.manual_recording.check_once()
+        assert runtime.manual_recording.snapshot()["state"] == "idle"
+        assert runtime.status.snapshot()["metrics"]["last_recording"] is None
+        assert runtime.status.snapshot()["components"]["recording"]["state"] == "ready"
+        assert list(settings.recording.root.iterdir()) == [old_video]
+        assert old_video.read_bytes() == b"existing footage"
+        assert not list(settings.data_dir.rglob("*.mkv"))
+    finally:
+        runtime.stop_services()
 
 
 def test_real_runtime_wires_target_acquisition_to_completed_uploadable_clip(tmp_path, monkeypatch):
@@ -189,9 +200,9 @@ def test_recovery_after_error_requires_resource_release_but_not_complete_recordi
         old.resources_released = True
         runtime._check_camera_once()
         assert runtime._camera is not old
-        assert runtime.diagnostics()['recovery']['previous_recording_finalized'] is False
+        assert runtime.diagnostics()['recovery']['previous_recording_finalized'] is None
         assert not runtime.status.snapshot()['tracking']['armed']
-        assert old.kwargs['spec'].recording_pattern != runtime._camera.kwargs['spec'].recording_pattern
+        assert runtime._camera.kwargs['spec'].recording_pattern is None
     finally:
         runtime.stop_services()
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=Verify Shore Jetson recordings on Google Drive and release local clips
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=2min
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+ExecStart=%h/.local/share/shore-tracker/venv/bin/python -B %h/.local/share/shore-tracker/backup/backup-recordings.py
+
+
+[Install]
+WantedBy=default.target

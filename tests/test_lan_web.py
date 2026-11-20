@@ -46,7 +46,7 @@ def test_webrtc_offer_body_is_forwarded_once_and_bounded(monkeypatch):
         return io.BytesIO(b'v=0\r\ns=answer\r\n')
     monkeypatch.setattr(web,'urlopen',relay)
     state=StatusStore();server=make_server(('127.0.0.1',0),state,AppController(state),PreviewStore())
-    server.h264_preview=object()
+    server.webrtc_preview=object()
     threading.Thread(target=server.serve_forever,daemon=True).start()
     try:
         c=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=2)
@@ -58,3 +58,31 @@ def test_webrtc_offer_body_is_forwarded_once_and_bounded(monkeypatch):
         c.request('POST','/api/stop','x'*5000,{'Content-Type':'application/json'})
         r=c.getresponse();assert r.status==413;r.read();c.close()
     finally:server.shutdown();server.server_close()
+
+
+
+@pytest.mark.parametrize(
+    ("peer", "allow_lan", "host", "allowed"),
+    [
+        ("100.64.0.11", True, "100.64.0.10", True),
+        ("100.64.0.12", True, "100.64.0.10:80", True),
+        ("100.64.0.11", False, "127.0.0.1", False),
+        ("100.64.0.12", True, "evil.example", False),
+        ("100.63.255.255", True, "100.64.0.10", False),
+        ("100.128.0.1", True, "100.64.0.10", False),
+        ("8.8.8.8", True, "127.0.0.1", False),
+    ],
+)
+def test_tailnet_peer_requires_lan_opt_in_and_matching_host(peer, allow_lan, host, allowed):
+    from types import SimpleNamespace
+    from shore_tracker.web.server import DashboardHandler
+
+    handler = object.__new__(DashboardHandler)
+    handler.client_address = (peer, 12345)
+    handler.server = SimpleNamespace(allow_lan=allow_lan)
+    handler.headers = {"Host": host}
+    handler.connection = SimpleNamespace(getsockname=lambda: ("100.64.0.10", 80))
+    responses = []
+    handler._json = lambda status, body: responses.append(status)
+    assert handler._reject_nonlocal_host() is not allowed
+    assert responses == ([] if allowed else [421])

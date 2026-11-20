@@ -79,6 +79,9 @@ fetch:async(path,options={})=>{if(offline) throw new Error('offline');if(options
   get('controlToggle').click();
   for(const handler of windowListeners.pointerdown)handler({target:{closest:()=>get('controlsPanel')}});assert.equal(get('controlsPanel')['aria-hidden'],'false','inside click keeps controls open');
   for(const handler of windowListeners.pointerdown)handler({target:{closest:()=>null}});assert.equal(get('windowActions').hidden,false);assert.equal(get('controlRail').hidden,false);assert.equal(get('controlsPanel')['aria-hidden'],'true');assert.equal(get('controlsPanel').inert,true);assert.equal(requests.length,countBeforeToggle,'opening controls must not actuate');
+  current.metrics.used_gib=9.4;current.metrics.free_gib=19.0;
+  vm.runInContext('render('+JSON.stringify(current)+')',context);
+  assert.equal(get('recordingCapacity').textContent,'錄影空間：已用 9.4 GiB／剩餘 19.0 GiB');
   const badges=()=>get('liveInfo').children.map(e=>e.textContent);
   assert.deepEqual(badges(),['10 FPS','未錄影']);
   assert.match(get('liveInfo').children[0].className,/good/);
@@ -138,6 +141,9 @@ fetch:async(path,options={})=>{if(offline) throw new Error('offline');if(options
   vm.runInContext('render('+JSON.stringify(current)+')',context);
   assert.equal(get('armButton').disabled,false);assert.equal(get('armButton').textContent,'停止追蹤');
   assert.equal(get('phase').textContent,'尋找中');assert.match(get('phase').className,/phase-searching/);
+  current.tracking.mode='manual';
+  vm.runInContext('render('+JSON.stringify(current)+')',context);
+  assert.equal(get('phase').textContent,'方向鍵手動控制');
   // Continuous/manual recording alone must never qualify a surf event.
   current.manual_recording={state:'recording',continuous_requested:true,manual_requested:true,tracking_requested:false,tracking_qualified:false};
   for (const mode of ['chasing','takeoff','surfing']) {

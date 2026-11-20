@@ -30,7 +30,7 @@ int main(int argc,char **argv) {
     QTimer::singleShot(1000,[=]{if(!button->isEnabled())qFatal("Test button unavailable");button->click();});
     QTimer::singleShot(1400,[=]{
         if(!button->text().contains("\n停止測試") || !button->isEnabled() || notice->isVisible())qFatal("Inline progress/STOP unavailable");
-        if(button->text()!="抬頭 40°\n停止測試")qFatal("Fourfold test angle missing from native button");
+        if(button->text()!="抬頭 20°\n停止測試")qFatal("Half tilt angle missing from native button");
     });
     QTimer::singleShot(2900,[=]{
         if(notice->isVisible() || button->text()!="雲台測試" || !recovery->text().isEmpty())qFatal("Completion/recovery text did not clear");

@@ -50,11 +50,26 @@ results rather than configured limits or detector-only throughput.
 
 ## Start/stop and live display
 
-Engines load at boot, but no model executes until tracking is started. STOP,
-run changes and the existing freshness deadline invalidate late results.
+Engines load at boot; AI recognition defaults off on every service start. The
+AI switch can run recognition while tracking remains DISARMED. Starting tracking
+automatically enables AI. AI can be disabled during tracking and recording:
+PWM tracking stays armed in manual mode, pending automatic targets and old boxes are
+cleared, and the PWM servos accept leased keyboard jogging. Enabling AI cancels
+jogging and waits for fresh observations before automatic following resumes.
+Recording no longer forces or locks AI; manual and continuous recording keep their
+existing triggers, while event recording expires when AI decisions become stale.
+STOP, AI switches, run changes and the existing freshness deadline invalidate late
+results. The historical non-PWM paths still DISARM when AI is disabled.
+Disabled AI does not trigger an inference-stale STOP; camera and UART
+faults retain their fail-safe behavior. Keyboard limits are documented in
+[the servo control contract](servo-controller.md#pwm-方向鍵手動控制).
 `/api/display-frame` immediately samples the newest JPEG using its sequence
 cursor, with no presentation buffer. Its metadata carries the latest valid
 recognition for the current run; boxes may therefore describe a slightly older
 image. This deliberately favors live video over exact image/box synchronization.
 The browser commits the new image and available boxes together. STOP and stale
 results clear overlays. Recording and Servo safety guards remain independent.
+
+## Locked rider position on Nano
+
+In decoded PWM mode the native preview frames supply up to the configured preview rate. A green-channel template search tracks one locked rider between detector frames. The matcher rejects weak contrast, ambiguous peaks, old samples and camera-generation changes. Optical positions can guide box association and pan/tilt between detections. Only detector/action results confirm a ride or extend its deadline. Other input modes use the detector-only path.

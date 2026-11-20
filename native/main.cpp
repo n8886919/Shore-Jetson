@@ -7,6 +7,10 @@
 #include <QHBoxLayout>
 #include <QCheckBox>
 #include <QSlider>
+#include <QLineEdit>
+#include <QAbstractSpinBox>
+#include <QDoubleSpinBox>
+#include <QComboBox>
 #include <QLabel>
 #include <QMessageBox>
 #include <QKeyEvent>
@@ -77,7 +81,10 @@ protected:
 
 class Desktop : public QWidget {
     QNetworkAccessManager network;
-    QTimer statusTimer, frameTimer, addressTimer, testTimer;
+    QTimer statusTimer, frameTimer, addressTimer, testTimer, keyboardTimer;
+    int heldKey=0, keyboardRevision=0, keyboardSequence=0;
+    QString keyboardSession, keyboardEpoch;
+    bool keyboardBusy=false;
     QElapsedTimer statusAge;
     QJsonObject state;
     QJsonObject testState;
@@ -98,15 +105,18 @@ class Desktop : public QWidget {
     QUrl base;
     QPushButton *arm, *gear, *shrink, *exitButton, *testButton;
     QScrollArea *panel;
-    QCheckBox *tilt, *continuous;
+    QCheckBox *tilt, *continuous, *inferenceEnabled;
     QSlider *deadband, *zoom;
-    QLabel *deadbandText, *zoomText, *feedback, *testNotice, *recoveryNotice;
+    QDoubleSpinBox *manualSpeed;
+    bool manualSpeedBusy=false;
+    double queuedManualSpeed=-1;
+    QLabel *deadbandText, *zoomText, *feedback, *testNotice, *recoveryNotice, *recordingCapacity;
     QList<QWidget*> lens;
     void request(QString path, QJsonObject body, std::function<void(QJsonObject,bool)> done, bool post=false) {
         QNetworkRequest req(base.resolved(QUrl(path)));
         req.setRawHeader("Origin", base.toString(QUrl::RemovePath|QUrl::RemoveQuery|QUrl::RemoveFragment).toUtf8());
         req.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
-        if (post && path=="/api/servo-test") req.setRawHeader("X-Pan-Tilt-Token",testToken);
+        if (post && (path=="/api/servo-test" || path=="/api/keyboard")) req.setRawHeader("X-Pan-Tilt-Token",testToken);
         auto reply=post ? network.post(req,QJsonDocument(body).toJson(QJsonDocument::Compact)) : network.get(req);
         auto timeout=new QTimer(reply); timeout->setSingleShot(true);
         connect(timeout,&QTimer::timeout,reply,&QNetworkReply::abort); timeout->start(2500);
@@ -116,6 +126,46 @@ class Desktop : public QWidget {
             reply->deleteLater(); done(data,ok);
         });
     }
+    QString keyDirection(int key) const {
+        if(key==Qt::Key_Up)return "up";if(key==Qt::Key_Down)return "down";
+        if(key==Qt::Key_Left)return "left";if(key==Qt::Key_Right)return "right";return {};
+    }
+    bool keyboardReady() const {
+        return !offline && !pending && fresh() && statusAge.elapsed()<1500
+            && !testToken.isEmpty() && state["keyboard"].toObject()["enabled"].toBool();
+    }
+    void stopKeyboard() {
+        if(!heldKey)return;
+        const QString epoch=keyboardEpoch;
+        heldKey=0;keyboardSession.clear();++keyboardRevision;keyboardBusy=false;
+        // Wait for status readback before allowing a new start with another epoch.
+        auto k=state["keyboard"].toObject();k["enabled"]=false;state["keyboard"]=k;
+        request("/api/keyboard",{{"action","stop"},{"epoch",epoch}},[=](QJsonObject,bool){pollStatus();},true);
+    }
+    void startKeyboard(int key) {
+        if(heldKey || !keyboardReady())return;
+        heldKey=key;keyboardEpoch=state["keyboard"].toObject()["epoch"].toString();
+        keyboardSession.clear();keyboardSequence=0;
+        const int revision=++keyboardRevision;
+        request("/api/keyboard",{{"action","start"},{"epoch",keyboardEpoch},{"direction",keyDirection(key)}},
+            [=](QJsonObject r,bool ok){
+                if(revision!=keyboardRevision)return;
+                if(!ok || !r["ok"].toBool()){stopKeyboard();return;}
+                keyboardSession=r["session"].toString();
+            },true);
+    }
+    void renewKeyboard() {
+        if(!heldKey)return;
+        if(!keyboardReady() || !isActiveWindow()
+                || state["keyboard"].toObject()["epoch"].toString()!=keyboardEpoch){stopKeyboard();return;}
+        if(keyboardBusy || keyboardSession.isEmpty())return;
+        keyboardBusy=true;const int revision=keyboardRevision;
+        request("/api/keyboard",{{"action","move"},{"session",keyboardSession},
+            {"sequence",++keyboardSequence},{"direction",keyDirection(heldKey)}},[=](QJsonObject r,bool ok){
+                if(revision!=keyboardRevision)return;
+                keyboardBusy=false;if(!ok || !r["ok"].toBool())stopKeyboard();
+            },true);
+    }
     bool armed() const { auto t=state["tracking"].toObject(); return t["armed"].toBool() || t["mode"].toString()=="arming"; }
     bool fresh() const { return statusAge.isValid() && statusAge.elapsed()<3000; }
     bool testing() const {return testBusy || !testSession.isEmpty() || testState["running"].toBool();}
@@ -123,7 +173,7 @@ class Desktop : public QWidget {
         const bool known=testAge.isValid() && testAge.elapsed()<3000;
         const QString phase=testState["phase"].toString();
         const QString step=testStopping?"停止中":testBusy?"啟動中":phase=="center"?"置中":
-            phase=="left"?"左 20°":phase=="right"?"右 40°":phase=="up"?"抬頭 40°":phase=="down"?"低頭 40°":"測試中";
+            phase=="left"?"左 20°":phase=="right"?"右 40°":phase=="up"?"抬頭 20°":phase=="down"?"低頭 20°":"測試中";
         testButton->setText(testing()?step+"\n停止測試":"雲台測試");
         testButton->setMinimumHeight(qRound((testing()?64:46)*qMin(width()/1024.0,height()/600.0)));
         testButton->setStyleSheet(testing()?"background:#712b35;color:white;border-color:#ad5965":"");
@@ -192,6 +242,20 @@ class Desktop : public QWidget {
         command("/api/tuning",{{"pan_gain_deg",t["pan_gain_deg"]},{"pan_direction",t["pan_direction"]},
             {"pan_deadband",deadband->value()/200.0},{"zoom_maximum",zoom->value()/10.0},{"tilt_enabled",tilt->isChecked()}});
     }
+    void sendManualSpeed() {
+        if(manualSpeedBusy || queuedManualSpeed<.1 || offline || !fresh() || testToken.isEmpty())return;
+        const double value=queuedManualSpeed;queuedManualSpeed=-1;manualSpeedBusy=true;
+        request("/api/keyboard",{{"action","speed"},{"speed_deg_s",value}},[=](QJsonObject r,bool ok){
+            manualSpeedBusy=false;
+            const auto keyboard=r["status"].toObject();
+            const bool applied=ok && r["ok"].toBool() && keyboard.contains("speed_deg_s")
+                && qFuzzyCompare(1+keyboard["speed_deg_s"].toDouble(),1+value);
+            if(applied)state["keyboard"]=keyboard;
+            feedback->setText(applied?"已套用":r["detail"].toString("速度未套用，請重試"));
+            if(!applied)queuedManualSpeed=-1;
+            sendManualSpeed();refreshButtons();pollStatus();
+        },true);
+    }
     QPushButton* button(QString text,QVBoxLayout *layout,std::function<void()> action) {
         auto b=new QPushButton(text); b->setMinimumHeight(38); layout->addWidget(b);
         connect(b,&QPushButton::clicked,this,action); return b;
@@ -203,7 +267,21 @@ class Desktop : public QWidget {
         arm->setStyleSheet(QString(active || (!known && !offline) ? "background:#712b35;color:white;font-size:%1px" : "background:#29d6bd;color:#05211e;font-size:%1px").arg(qMax(12,int(22*qMin(width()/1024.0,height()/600.0)))));
         tilt->setEnabled(!offline && known && !pending && state["tuning"].toObject()["tilt_available"].toBool());
         continuous->setEnabled(!offline && known && !pending);
+        const auto disk=state["metrics"].toObject();
+        const auto used=disk["used_gib"], free=disk["free_gib"];
+        recordingCapacity->setVisible(state["manual_recording"].toObject()["destination"].toString()!="camera_sd");
+        recordingCapacity->setText(known && !offline && used.isDouble() && free.isDouble()
+            ? QString("錄影空間：已用 %1 GiB／剩餘 %2 GiB").arg(used.toDouble(),0,'f',1).arg(free.toDouble(),0,'f',1)
+            : QString("錄影空間：尚無資料"));
+        const auto ai=state["inference"].toObject();
+        const auto aiState=state["components"].toObject()["inference"].toObject()["state"].toString();
+        inferenceEnabled->setEnabled(!offline && known && !pending && ai.contains("enabled") && !ai["locked"].toBool()
+            && (aiState=="idle" || aiState=="ready" || aiState=="stale"));
+        inferenceEnabled->setToolTip(ai["locked"].toBool()?"錄影期間保持開啟":"AI 辨識");
         deadband->setEnabled(!offline && known && !pending); zoom->setEnabled(deadband->isEnabled());
+        const auto keyboard=state["keyboard"].toObject();
+        manualSpeed->setEnabled(!offline && known && !pending && !testToken.isEmpty()
+            && keyboard["available"].toBool() && keyboard.contains("speed_deg_s"));
         for (auto w:lens) w->setEnabled(!offline && known && !active && !pending);
         renderTest();
     }
@@ -226,7 +304,15 @@ class Desktop : public QWidget {
                 int result=state["recognition"].toObject()["sequence"].toInt(-1);
                 if(result>=0 && result!=lastInference){lastInference=result;inferencePulse.restart();}
                 auto t=state["tuning"].toObject();
-                QSignalBlocker a(tilt),b(continuous),c(deadband),d(zoom);
+                QSignalBlocker a(tilt),b(continuous),c(deadband),d(zoom),e(inferenceEnabled);
+                QSignalBlocker speedBlock(manualSpeed);
+                const auto keyboard=state["keyboard"].toObject();
+                manualSpeed->setMaximum(keyboard["max_speed_deg_s"].toDouble(5));
+                const auto focus=QApplication::focusWidget();
+                const bool editing=manualSpeed->hasFocus() || (focus && manualSpeed->isAncestorOf(focus));
+                if(!editing && !manualSpeedBusy && queuedManualSpeed<0 && keyboard.contains("speed_deg_s"))
+                    manualSpeed->setValue(keyboard["speed_deg_s"].toDouble());
+                inferenceEnabled->setChecked(state["inference"].toObject()["enabled"].toBool());
                 tilt->setChecked(t["tilt_enabled"].toBool());
                 continuous->setChecked(state["manual_recording"].toObject()["continuous_enabled"].toBool());
                 if (!deadband->isSliderDown()) deadband->setValue(qRound(t["pan_deadband"].toDouble(.2)*200));
@@ -289,20 +375,41 @@ class Desktop : public QWidget {
         gear->setVisible(!drawer); exitButton->setVisible(!drawer); shrink->setVisible(!drawer); panel->setVisible(drawer);
         for (auto b:{gear,shrink,exitButton}) b->setIconSize(QSize(qRound(38*s),qRound(38*s)));
         panel->setStyleSheet(QString("QWidget{font-size:%1px}").arg(qMax(10,int(19*s))));
-        tilt->setFixedHeight(qRound(44*s));continuous->setFixedHeight(qRound(44*s));
+        tilt->setFixedHeight(qRound(44*s));continuous->setFixedHeight(qRound(44*s));inferenceEnabled->setFixedHeight(qRound(44*s));
         for(auto b:panel->findChildren<QPushButton*>())b->setMinimumHeight(qRound(46*s));
         refreshButtons();
     }
 protected:
     bool event(QEvent *e) override {
-        if(e->type()==QEvent::WindowDeactivate || e->type()==QEvent::Hide)stopTest();
+        if(e->type()==QEvent::WindowDeactivate || e->type()==QEvent::Hide){stopTest();stopKeyboard();}
         return QWidget::event(e);
+    }
+    bool eventFilter(QObject *watched,QEvent *event) override {
+        auto w=qobject_cast<QWidget*>(watched);
+        if(!w || w->window()!=this)return QWidget::eventFilter(watched,event);
+        const bool input=qobject_cast<QSlider*>(w) || qobject_cast<QLineEdit*>(w)
+            || qobject_cast<QAbstractSpinBox*>(w) || qobject_cast<QComboBox*>(w);
+        if(event->type()==QEvent::FocusIn && input)stopKeyboard();
+        if(event->type()==QEvent::KeyPress || event->type()==QEvent::KeyRelease){
+            auto key=static_cast<QKeyEvent*>(event);
+            if(key->key()==Qt::Key_Escape)stopKeyboard();
+            if(event->type()==QEvent::KeyRelease && key->key()==heldKey){
+                if(!key->isAutoRepeat())stopKeyboard();
+                return true;
+            }
+            if(event->type()==QEvent::KeyPress && !keyDirection(key->key()).isEmpty() && !input
+                    && !(key->modifiers()&(Qt::AltModifier|Qt::ControlModifier|Qt::MetaModifier))){
+                if(heldKey)return true;
+                if(keyboardReady() && !key->isAutoRepeat()){startKeyboard(key->key());return true;}
+            }
+        }
+        return QWidget::eventFilter(watched,event);
     }
     void resizeEvent(QResizeEvent*) override {positionWidgets();}
     void keyPressEvent(QKeyEvent *e) override {if(e->key()==Qt::Key_Escape){stopTest();drawer=false;positionWidgets();update();}else QWidget::keyPressEvent(e);}
     void mousePressEvent(QMouseEvent*) override {if(drawer){stopTest();drawer=false;positionWidgets();update();}}
     void closeEvent(QCloseEvent *e) override {
-        stopTest();
+        stopTest();stopKeyboard();
         if (offline || QMessageBox::question(this,"關閉 Shore Jetson","關閉視窗？背景追蹤與錄影會繼續執行。",QMessageBox::Yes|QMessageBox::No,QMessageBox::No)==QMessageBox::Yes) e->accept(); else e->ignore();
     }
     void paintEvent(QPaintEvent*) override {
@@ -320,7 +427,7 @@ protected:
             p.setPen(QPen(QColor("#29d6bd"),1));for(double x:{.5-db,.5+db})p.drawLine(QPointF(tx(x),0),QPointF(tx(x),video.height()));
             if(tuning["tilt_enabled"].toBool())for(double y:{.5-db,.5+db})p.drawLine(QPointF(video.left(),ty(y)),QPointF(video.right(),ty(y)));
             auto recognition=state["recognition"].toObject();
-            if(fresh() && armed() && recognition["available"].toBool() && statusAge.elapsed()<recognition["valid_for_ms"].toInt()) {
+            if(fresh() && state["inference"].toObject()["enabled"].toBool() && recognition["available"].toBool() && statusAge.elapsed()<recognition["valid_for_ms"].toInt()) {
                 p.setFont(QFont("Noto Sans CJK TC",12));
                 for(auto item:recognition["detections"].toArray()) {
                     auto obj=item.toObject(),b=obj["box"].toObject();
@@ -337,12 +444,13 @@ protected:
         p.fillRect(QRectF(0,544,1024,56),QColor("#0a171d"));p.setFont(QFont("Noto Sans CJK TC",12));p.setPen(QColor("#ecf7f5"));
         auto metrics=state["metrics"].toObject(),rec=state["manual_recording"].toObject();
         QString text=offline?"離線預覽":!fresh()?"服務連線中斷":QString("%1 FPS    %2").arg(qRound(metrics["preview_fps"].toDouble())).arg(rec["state"].toString()=="recording"?"錄影中":"未錄影");
-        if(armed()&&fresh())text += state["tracking"].toObject()["mode"].toString()=="searching"?"    尋找中":rec["tracking_qualified"].toBool()?"    起乘／衝浪":"    偵測到追浪";
+        if(armed()&&fresh() && state["keyboard"].toObject()["enabled"].toBool())text += "    方向鍵長按移動，放開停止";
+        else if(armed()&&fresh())text += state["tracking"].toObject()["mode"].toString()=="searching"?"    尋找中":rec["tracking_qualified"].toBool()?"    起乘／衝浪":"    偵測到追浪";
         if(fresh() && !offline){auto servo=state["components"].toObject()["servo"].toObject()["state"].toString();
             if(servo=="manual")text+="    舵機手動控制中";else if(servo!="ready")text+="    舵機未連線";}
         if(!notice.isEmpty()) text=notice;
         p.drawText(QRectF(12,547,770,23),Qt::AlignLeft|Qt::AlignVCenter,text);
-        if(fresh() && armed() && state["recognition"].toObject()["available"].toBool()) {
+        if(fresh() && state["inference"].toObject()["enabled"].toBool() && state["recognition"].toObject()["available"].toBool()) {
             p.setPen(Qt::NoPen);p.setBrush(inferencePulse.isValid()&&inferencePulse.elapsed()<160?QColor("#29d6bd"):QColor("#07562b"));
             p.drawEllipse(QPointF(788,560),6,6);
         }
@@ -369,20 +477,36 @@ public:
         }
         testButton=button("雲台測試",layout,[=]{toggleTest();});testButton->setObjectName("servoTestButton");
         testNotice=new QLabel;testNotice->setObjectName("servoTestState");testNotice->setWordWrap(true);layout->addWidget(testNotice);
+        inferenceEnabled=new Toggle("AI 辨識");inferenceEnabled->setObjectName("inferenceEnabled");layout->addWidget(inferenceEnabled);
+        connect(inferenceEnabled,&QCheckBox::clicked,this,[=](bool v){stopKeyboard();command("/api/inference",{{"enabled",v}});});
+        auto speedLabel=new QLabel("手動控制速度（°/s）");speedLabel->setWordWrap(true);layout->addWidget(speedLabel);
+        manualSpeed=new QDoubleSpinBox;manualSpeed->setObjectName("manualSpeed");
+        manualSpeed->setAccessibleName("手動控制速度（°/s）");manualSpeed->setRange(.1,5);
+        manualSpeed->setDecimals(1);manualSpeed->setSingleStep(.1);manualSpeed->setValue(5);
+        manualSpeed->setKeyboardTracking(true);manualSpeed->setMinimumHeight(36);
+        manualSpeed->setStyleSheet("QDoubleSpinBox{background:#13252a;border:1px solid #38545b;border-radius:7px;padding:5px 9px}");
+        layout->addWidget(manualSpeed);speedLabel->setBuddy(manualSpeed);
+        connect(manualSpeed,QOverload<double>::of(&QDoubleSpinBox::valueChanged),this,[=](double value){
+            if(!manualSpeed->isEnabled())return;
+            queuedManualSpeed=value;sendManualSpeed();
+        });
         tilt=new Toggle("啟用俯仰");layout->addWidget(tilt);connect(tilt,&QCheckBox::clicked,this,[=]{applyTuning();});
         deadbandText=new QLabel("跟拍容許區 40%");layout->addWidget(deadbandText);deadband=new QSlider(Qt::Horizontal);deadband->setRange(10,80);deadband->setValue(40);layout->addWidget(deadband);
         connect(deadband,&QSlider::valueChanged,this,[=](int v){deadbandText->setText(QString("跟拍容許區 %1%").arg(v));});connect(deadband,&QSlider::sliderReleased,this,[=]{applyTuning();});
         zoomText=new QLabel("畫面放大 1.0×");layout->addWidget(zoomText);zoom=new QSlider(Qt::Horizontal);zoom->setRange(10,40);zoom->setValue(10);layout->addWidget(zoom);
         connect(zoom,&QSlider::valueChanged,this,[=](int v){zoomText->setText(QString("畫面放大 %1×").arg(v/10.0,0,'f',1));});connect(zoom,&QSlider::sliderReleased,this,[=]{applyTuning();});
         continuous=new Toggle("連續錄影");layout->addWidget(continuous);connect(continuous,&QCheckBox::clicked,this,[=](bool v){command("/api/recording/mode",{{"continuous",v}});});
+        recordingCapacity=new QLabel; recordingCapacity->setWordWrap(true); layout->addWidget(recordingCapacity);
         recoveryNotice=new QLabel;recoveryNotice->setObjectName("recoveryState");recoveryNotice->setWordWrap(true);layout->addWidget(recoveryNotice);
         feedback=new QLabel;feedback->setWordWrap(true);layout->addWidget(feedback);layout->addStretch();panel->setWidget(controls);
         connect(gear,&QPushButton::clicked,this,[=]{if(drawer)stopTest();drawer=!drawer;positionWidgets();update();});connect(exitButton,&QPushButton::clicked,this,[=]{close();});
         connect(shrink,&QPushButton::clicked,this,[=]{compact=!compact;if(compact){showNormal();resize(512,300);}else showFullScreen();});
-        connect(arm,&QPushButton::clicked,this,[=]{drawer=false;positionWidgets();command(!fresh()||armed()?"/api/stop":"/api/arm");});
+        connect(arm,&QPushButton::clicked,this,[=]{stopKeyboard();drawer=false;positionWidgets();command(!fresh()||armed()?"/api/stop":"/api/arm");});
         connect(&statusTimer,&QTimer::timeout,this,[=]{pollStatus();});statusTimer.start(250);
         connect(&frameTimer,&QTimer::timeout,this,[=]{readFrame();});frameTimer.start(20);
         connect(&addressTimer,&QTimer::timeout,this,[=]{refreshAddress();});addressTimer.start(5000);refreshAddress();
+        qApp->installEventFilter(this);
+        connect(&keyboardTimer,&QTimer::timeout,this,[=]{renewKeyboard();});keyboardTimer.start(100);
         connect(&testTimer,&QTimer::timeout,this,[=]{pollTest();});testTimer.start(250);pollTest();
         if(offline){image=QImage(960,540,QImage::Format_RGB32);QPainter p(&image);QLinearGradient grad(0,0,960,540);grad.setColorAt(0,QColor("#123c48"));grad.setColorAt(1,QColor("#08141c"));p.fillRect(image.rect(),grad);p.setPen(QColor("#adc1c5"));p.setFont(QFont("Noto Sans CJK TC",24));p.drawText(image.rect(),Qt::AlignCenter,"Shore Jetson · 離線預覽");}
         refreshButtons();pollStatus();positionWidgets();

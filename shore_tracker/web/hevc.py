@@ -1,11 +1,11 @@
-"""On-demand, video-only hardware H.264 preview for the local WebRTC relay."""
+"""On-demand, video-only hardware H.265 preview for the local WebRTC relay."""
 from __future__ import annotations
 
 import queue
 import threading
 
 
-class H264Preview:
+class HevcPreview:
     def __init__(self):
         self._lock = threading.RLock()
         self._clients = set()
@@ -28,8 +28,8 @@ class H264Preview:
             'caps=video/x-raw,format=BGRx,width=960,height=540,framerate=10/1 '
             '! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 '
             '! nvvidconv ! video/x-raw(memory:NVMM),format=I420 '
-            '! nvv4l2h264enc bitrate=1500000 iframeinterval=10 insert-sps-pps=true maxperf-enable=true '
-            '! h264parse ! mpegtsmux alignment=7 '
+            '! nvv4l2h265enc bitrate=1500000 iframeinterval=10 idrinterval=10 insert-sps-pps=true maxperf-enable=true '
+            '! h265parse config-interval=-1 ! video/x-h265,stream-format=byte-stream,alignment=au ! mpegtsmux alignment=7 '
             '! appsink name=output emit-signals=true sync=false max-buffers=2 drop=true')
         self._source = self._pipeline.get_by_name('source')
         self._pipeline.get_by_name('output').connect('new-sample', self._sample)

@@ -34,6 +34,7 @@ class InferenceWorker:
         clock: Callable[[], float] = time.monotonic,
         on_demand: bool = False,
         confirmation_frames: int = 1,
+        position_frames=None,
     ) -> None:
         self.preview = preview
         self.status = status
@@ -43,6 +44,11 @@ class InferenceWorker:
         self.clock = clock
         self.on_demand = on_demand
         self.confirmation = DetectionConfirmation(confirmation_frames)
+        self.position = None
+        self._position_thread = None
+        if position_frames is not None and on_demand:
+            from shore_tracker.inference.position import LockedPosition
+            self.position = LockedPosition(position_frames, coordinator, status, stale_seconds, clock)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._rate_condition = threading.Condition()
@@ -78,6 +84,10 @@ class InferenceWorker:
             target=self._run, name="surftrack-inference", daemon=True
         )
         self._thread.start()
+        if self.position is not None:
+            self._position_thread = threading.Thread(target=self.position.watch,
+                args=(self._stop,), name="rider-position", daemon=True)
+            self._position_thread.start()
 
     def close(self, *, timeout: float = 2.0) -> bool:
         self._stop.set()
@@ -87,8 +97,11 @@ class InferenceWorker:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=max(0.0, timeout))
         stopped = thread is None or not thread.is_alive()
+        if self._position_thread is not None:
+            self._position_thread.join(timeout=max(0.0, timeout))
+            stopped = stopped and not self._position_thread.is_alive()
         if stopped:
-            self._thread = None
+            self._thread = self._position_thread = None
         return stopped
 
     def _run(self) -> None:
@@ -103,7 +116,7 @@ class InferenceWorker:
                 run = self.status.inference_run() if self.on_demand else None
                 if self.on_demand and run is None:
                     if self.status.snapshot()['components']['inference']['state'] != 'idle':
-                        self.status.update_component('inference', 'idle', '等待開始追蹤')
+                        self.status.update_component('inference', 'idle', 'AI 辨識已關閉')
                     previous_completed_at = previous_start = None
                     active_run = None
                     last_frame_at = self.clock()
@@ -135,7 +148,11 @@ class InferenceWorker:
                 started = self.clock()
                 if isinstance(frame, DecodedFrame):
                     image = frame.to_image()
-                    observations = self.models.infer_image(image)
+                    if self.position is None:
+                        observations = self.models.infer_image(image)
+                    else:
+                        observations = self.models.infer_image(image,
+                            position_hint=self.position.hint(frame, run))
                 else:
                     observations = self.models.infer_jpeg(frame.jpeg)
                 completed = self.clock()
@@ -159,7 +176,10 @@ class InferenceWorker:
                     inference_fps=measured_fps,
                 )
                 options = {'inference_run_id': run[0]} if self.on_demand else {}
-                self.coordinator.process_frame(observations, now=completed, **options)
+                if self.position is not None and isinstance(frame, DecodedFrame):
+                    self.position.detected(frame, run, observations, completed)
+                else:
+                    self.coordinator.process_frame(observations, now=completed, **options)
         except Exception:
             self.status.update_component(
                 "inference", "error", "native TensorRT inference stopped"

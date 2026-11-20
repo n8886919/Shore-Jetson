@@ -99,6 +99,11 @@ function renderOperatorStatus(data) {
     : recording.detail || '未錄影';
   nodes.push(chip(recordingNow ? '錄影中' : '未錄影',
     `recording-badge ${recordingNow ? 'is-recording' : 'not-recording'}`,detail));
+  const capacity = $('recordingCapacity');
+  capacity.hidden = recording.destination === 'camera_sd';
+  capacity.textContent = !offlinePreview && Number.isFinite(metrics.used_gib) && Number.isFinite(metrics.free_gib)
+    ? `錄影空間：已用 ${metrics.used_gib.toFixed(1)} GiB／剩餘 ${metrics.free_gib.toFixed(1)} GiB`
+    : '錄影空間：尚無資料';
   const info = $('liveInfo');
   if (info.children.length !== nodes.length) info.replaceChildren(...nodes);
   else nodes.forEach((node,index) => {
@@ -109,11 +114,12 @@ function renderOperatorStatus(data) {
   }); // Keep the recording node attached so polling never restarts its blink.
   renderInferenceLamp();
   $('phase').hidden = !trackingActive || offlinePreview;
+  const manual = tracking.mode === 'manual';
   const searching = ['arming','searching','finished'].includes(tracking.mode);
   const qualified = !searching && recording.tracking_requested === true && recording.tracking_qualified === true;
-  $('phase').className = `status-chip ${searching ? 'phase-searching' : qualified ? 'phase-qualified' : 'phase-chasing'}`;
-  $('phase').textContent = searching ? '尋找中' : qualified ? '起乘／衝浪' : '偵測到追浪';
-  $('phase').title = qualified ? '追浪已發展成起乘／衝浪，事件影片會保留' : '';
+  $('phase').className = `status-chip ${manual || searching ? 'phase-searching' : qualified ? 'phase-qualified' : 'phase-chasing'}`;
+  $('phase').textContent = manual ? '方向鍵手動控制' : searching ? '尋找中' : qualified ? '起乘／衝浪' : '偵測到追浪';
+  $('phase').title = manual ? '長按移動，放開停止' : qualified ? '追浪已發展成起乘／衝浪，事件影片會保留' : '';
   if (!trackingActive && !offlinePreview && !data.arm_allowed) {
     const blocked = [['camera','相機'],['inference','辨識'],['servo','舵機']].find(([key]) =>
       components[key]?.state !== 'ready' && !(key === 'inference' && components[key]?.state === 'idle'));
@@ -137,6 +143,8 @@ let detectionItems = [], detectionZoom = 1, detectionCenter = .5, detectionTimer
 let trackingDeadband = null, trackingZoneVisible = false, trackingZoneZoom = 1, trackingZoneCenter = .5, trackingTiltEnabled = false;
 $('stream').addEventListener('error', () => { streamNeedsReconnect = true; streamRetryAt = Date.now()+1000; });
 function render(data) {
+  window.shoreInferenceControl?.render(data);
+  window.shoreKeyboardControl?.render(data);
   offlinePreview = data.offline_preview === true;
   const tracking = data.tracking, metrics = data.metrics, cameraReady = data.components.camera.state === 'ready';
   const deadband = data.tuning?.pan_deadband;
@@ -145,7 +153,7 @@ function render(data) {
   trackingKnown = true;
   trackingActive = tracking.armed || tracking.mode === 'arming';
   if (!trackingActive) stopRequested = false;
-  if (currentRunId !== data.inference_run_id || !trackingActive) {
+  if (currentRunId !== data.inference_run_id || data.inference_run_id == null) {
     frameRecognized = false;
     inferenceSequence = null;
     updateDetections(null,false,1,.5);
@@ -177,7 +185,7 @@ function render(data) {
     $('rtcStream').style.transform = `scale(${zoom})`;
   }
   if (remoteVideo) {
-    frameRecognized = trackingActive && data.recognition?.available === true;
+    frameRecognized = data.inference_run_id != null && data.recognition?.available === true;
     updateDetections(data.recognition,frameRecognized,zoom,center);
     renderInferenceLamp(data.recognition);
   }
@@ -195,6 +203,8 @@ async function refresh() {
     if (!response.ok) throw new Error('unavailable');
     render(await response.json());
   } catch (_) {
+    window.shoreInferenceControl?.disconnect();
+    window.shoreKeyboardControl?.disconnect();
     window.shoreRemoteVideo?.tick(false);
     trackingKnown = false;
     $('armButton').textContent = '停止追蹤';
@@ -202,6 +212,7 @@ async function refresh() {
     $('armButton').className = 'stop';
     $('armButton').disabled = offlinePreview || commandPending;
     $('phase').hidden = true;
+    $('recordingCapacity').textContent = '錄影空間：尚無資料';
     $('liveInfo').replaceChildren(chip('服務連線中斷','bad'));
     $('phase').hidden = false;
     $('phase').className = 'status-chip bad';
@@ -241,7 +252,7 @@ setInterval(refresh,200);
 refresh();
 
 function renderInferenceLamp(recognition = null) {
-  const visible = frameRecognized && trackingActive && !stopRequested && !offlinePreview;
+  const visible = frameRecognized && currentRunId != null && !stopRequested && !offlinePreview;
   $('inferenceLamp').style.visibility = visible ? 'visible' : 'hidden';
   if (!visible) {
     inferencePulse?.cancel();
@@ -268,7 +279,7 @@ function commitDisplayFrame(image, metadata) {
   }
   canvas.getContext('2d', {alpha:false}).drawImage(image,0,0);
   frameCursor = metadata.cursor;
-  frameRecognized = metadata.recognized === true && metadata.recognition?.available === true && metadata.run_id === currentRunId && trackingActive && !stopRequested;
+  frameRecognized = metadata.recognized === true && metadata.recognition?.available === true && metadata.run_id === currentRunId && currentRunId != null && !stopRequested;
   updateDetections(frameRecognized ? metadata.recognition : null,true,detectionZoom,detectionCenter);
   renderInferenceLamp(metadata.recognition);
   clearTimeout(frameExpiry);

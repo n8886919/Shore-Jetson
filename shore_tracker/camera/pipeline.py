@@ -184,7 +184,7 @@ class PipelineSpec:
     codec: VideoCodec
     elements: tuple[ElementSpec, ...]
     links: tuple[LinkSpec, ...]
-    recording_pattern: Path
+    recording_pattern: Path | None
     segment_seconds: int
     expected_rtp_media: str = "video"
     expected_rtp_encoding: str = "H264"
@@ -210,7 +210,7 @@ _CODEC_ELEMENTS = {
 
 def build_pipeline_spec(
     codec: VideoCodec | str,
-    recording_pattern: str | Path,
+    recording_pattern: str | Path | None,
     *,
     segment_seconds: int = 600,
     rtsp_latency_ms: int = 200,
@@ -237,10 +237,10 @@ def build_pipeline_spec(
     if type(rotation_degrees) is not int or rotation_degrees not in {0, 180}:
         raise ValueError("rotation_degrees must be 0 or 180")
 
-    pattern = Path(recording_pattern)
-    _validate_recording_pattern(pattern)
+    pattern = Path(recording_pattern) if recording_pattern is not None else None
+    if pattern is not None:
+        _validate_recording_pattern(pattern)
     encoding, depay, parser = _CODEC_ELEMENTS[selected]
-    max_size_time = segment_seconds * 1_000_000_000
 
     elements = (
         ElementSpec(
@@ -254,21 +254,6 @@ def build_pipeline_spec(
             ),
         ),
         ElementSpec(depay, "video_depay"),
-        ElementSpec("tee", "encoded_tee", (("allow-not-linked", True),)),
-        ElementSpec("queue", "record_queue"),
-        ElementSpec(parser, "record_parse", (("config-interval", -1),)),
-        ElementSpec(
-            "splitmuxsink",
-            "segment_sink",
-            (
-                ("async-finalize", True),
-                ("muxer-factory", "matroskamux"),
-                ("max-size-time", max_size_time),
-                ("max-size-bytes", 0),
-                ("max-files", 0),
-                ("send-keyframe-requests", True),
-            ),
-        ),
         ElementSpec(
             "queue",
             "preview_queue",
@@ -319,30 +304,30 @@ def build_pipeline_spec(
             ),
         ),
     )
-    links = (
-        LinkSpec("video_depay", "encoded_tee"),
-        LinkSpec(
-            "encoded_tee",
-            "record_queue",
-            source_pad="src_%u",
-            target_pad="sink",
-            request_source=True,
-        ),
-        LinkSpec("record_queue", "record_parse"),
-        LinkSpec(
-            "record_parse",
-            "segment_sink",
-            source_pad="src",
-            target_pad="video",
-            request_target=True,
-        ),
-        LinkSpec(
-            "encoded_tee",
-            "preview_queue",
-            source_pad="src_%u",
-            target_pad="sink",
-            request_source=True,
-        ),
+    if pattern is None:
+        links = (LinkSpec("video_depay", "preview_queue"),)
+    else:
+        elements += (
+            ElementSpec("tee", "encoded_tee", (("allow-not-linked", True),)),
+            ElementSpec("queue", "record_queue"),
+            ElementSpec(parser, "record_parse", (("config-interval", -1),)),
+            ElementSpec("splitmuxsink", "segment_sink", (
+                ("async-finalize", True),
+                ("muxer-factory", "matroskamux"),
+                ("max-size-time", segment_seconds * 1_000_000_000),
+                ("max-size-bytes", 0),
+                ("max-files", 0),
+                ("send-keyframe-requests", True),
+            )),
+        )
+        links = (
+            LinkSpec("video_depay", "encoded_tee"),
+            LinkSpec("encoded_tee", "record_queue", "src_%u", "sink", request_source=True),
+            LinkSpec("record_queue", "record_parse"),
+            LinkSpec("record_parse", "segment_sink", "src", "video", request_target=True),
+            LinkSpec("encoded_tee", "preview_queue", "src_%u", "sink", request_source=True),
+        )
+    links += (
         LinkSpec("preview_queue", "preview_parse"),
         LinkSpec("preview_parse", "preview_decoder"),
         LinkSpec("preview_decoder", "preview_nvconvert"),
@@ -696,9 +681,9 @@ class GStreamerPipelineFactory:
         # This is the sole point where the secret URI enters GStreamer.  It was
         # intentionally absent while parsing/building the public specification.
         source.set_property("location", rtsp_uri._reveal())
-        elements[spec.segment_sink_name].set_property(
-            "location", str(spec.recording_pattern)
-        )
+        segment_sink = elements.get(spec.segment_sink_name)
+        if spec.recording_pattern is not None:
+            segment_sink.set_property("location", str(spec.recording_pattern))
 
         for link in spec.links:
             self._link(gst, elements, link)
@@ -716,7 +701,7 @@ class GStreamerPipelineFactory:
             gst=gst,
             pipeline=pipeline,
             preview_sink=elements[spec.preview_sink_name],
-            segment_sink=elements[spec.segment_sink_name],
+            segment_sink=segment_sink,
             on_preview_jpeg=on_preview_jpeg,
             on_event=on_event,
             diagnostic_redactor=rtsp_uri,
@@ -1005,7 +990,8 @@ class _GstPipelineHandle:
         buffer = sample.get_buffer()
         # BGRx is four bytes/pixel; nvvidconv's CPU output has aligned rows.
         data = buffer.extract_dup(0, buffer.get_size())
-        self._on_native_frame(data, width, height, len(data) // height)
+        self._on_native_frame(data, width, height, len(data) // height,
+                              source_pts_ns=getattr(buffer, "pts", None))
         return self._gst.FlowReturn.OK
 
     def _new_decoded_sample(self, sink: Any) -> Any:
@@ -1061,7 +1047,7 @@ class _GstPipelineHandle:
         return self._gst.BusSyncReply.DROP
 
     def _copy_element_message(self, message: Any) -> _QueuedBusEvent | None:
-        if message.src != self._segment_sink:
+        if self._segment_sink is None or message.src != self._segment_sink:
             return None
         structure = message.get_structure()
         if structure is None:
@@ -1256,6 +1242,10 @@ class CameraPipeline:
     def __repr__(self) -> str:
         return f"CameraPipeline(codec={self._spec.codec.value!r}, uri=[REDACTED])"
 
+    def _update_local_recording(self, state: str, detail: str) -> None:
+        if self._spec.recording_pattern is not None:
+            self._status.update_component("recording", state, detail)
+
     @property
     def running(self) -> bool:
         with self._lock:
@@ -1364,7 +1354,9 @@ class CameraPipeline:
             self._terminal_event = False
             self._terminal_kind = None
             self._last_progress_monotonic = time.monotonic()
-            self._recording_progress_monotonic = time.monotonic()
+            self._recording_progress_monotonic = (
+                time.monotonic() if self._spec.recording_pattern is not None else None
+            )
             self._active_recording_path = None
             self._active_recording_size = None
             self._finalization_started_monotonic = None
@@ -1374,15 +1366,13 @@ class CameraPipeline:
             callback_generation = self._callback_generation
             self._active_callback_generation = callback_generation
         self._status.update_component("camera", "starting", "waiting for video")
-        self._status.update_component(
-            "recording", "starting", "waiting for video"
-        )
+        self._update_local_recording("starting", "waiting for video")
         handle: PipelineHandle | None = None
         factory_invoked = False
         try:
-            self._spec.recording_pattern.parent.mkdir(
-                parents=True, exist_ok=True
-            )
+            pattern = self._spec.recording_pattern
+            if pattern is not None:
+                pattern.parent.mkdir(parents=True, exist_ok=True)
             factory_invoked = True
             handle = self._factory.build(
                 self._spec,
@@ -1394,9 +1384,7 @@ class CameraPipeline:
                     generation, event
                 ),
             )
-            if _recording_pattern_has_existing_fragment(
-                self._spec.recording_pattern
-            ):
+            if pattern is not None and _recording_pattern_has_existing_fragment(pattern):
                 raise CameraPipelineError(
                     "recording pattern would overwrite an existing fragment"
                 )
@@ -1415,9 +1403,7 @@ class CameraPipeline:
             self._status.update_component(
                 "camera", "offline", "GStreamer is unavailable"
             )
-            self._status.update_component(
-                "recording", "paused", "camera pipeline unavailable"
-            )
+            self._update_local_recording("paused", "camera pipeline unavailable")
             return False
         except BaseException as exc:
             if handle is not None:
@@ -1431,9 +1417,7 @@ class CameraPipeline:
                 exc, fallback="camera pipeline could not start"
             )
             self._status.update_component("camera", "error", detail)
-            self._status.update_component(
-                "recording", "paused", "camera pipeline did not start"
-            )
+            self._update_local_recording("paused", "camera pipeline did not start")
             return False
         with self._lock:
             if self._terminal_event or self._stopping:
@@ -1461,7 +1445,8 @@ class CameraPipeline:
         if handle is not None:
             try:
                 finalized = handle.stop(
-                    graceful=True, timeout_seconds=timeout_seconds
+                    graceful=self._spec.recording_pattern is not None,
+                    timeout_seconds=timeout_seconds,
                 )
             except BaseException:
                 finalized = False
@@ -1494,10 +1479,8 @@ class CameraPipeline:
                 self._callbacks_active = False
                 self._status.disarm("camera pipeline stopped")
                 self._status.update_component("camera", "offline", "stopped")
-                self._status.update_component(
-                    "recording",
-                    "paused",
-                    "stopped" if finalized else "finalization was not confirmed",
+                self._update_local_recording(
+                    "paused", "stopped" if finalized else "finalization was not confirmed",
                 )
         return finalized
 
@@ -1568,6 +1551,10 @@ class CameraPipeline:
                 )
 
     def _receive_event(self, generation: int, event: PipelineEvent) -> None:
+        if self._spec.recording_pattern is None and event.kind in {
+            PipelineEventKind.FRAGMENT_OPENED, PipelineEventKind.FRAGMENT_CLOSED,
+        }:
+            return
         if event.kind == PipelineEventKind.FRAGMENT_CLOSED:
             self._receive_fragment_closed(generation, event)
             return
@@ -1645,7 +1632,7 @@ class CameraPipeline:
                 detail = "stopped" if stopping else "stream ended"
                 self._status.disarm("camera stream ended")
                 self._status.update_component("camera", "offline", detail)
-                self._status.update_component("recording", "paused", detail)
+                self._update_local_recording("paused", detail)
                 return
             if event.kind == PipelineEventKind.ERROR:
                 detail = self._rtsp_uri.redact(
@@ -1653,9 +1640,7 @@ class CameraPipeline:
                 )
                 self._status.disarm("camera pipeline error")
                 self._status.update_component("camera", "error", detail)
-                self._status.update_component(
-                    "recording", "paused", "camera pipeline error"
-                )
+                self._update_local_recording("paused", "camera pipeline error")
 
     def _receive_fragment_closed(
         self,

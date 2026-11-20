@@ -105,11 +105,13 @@ class StorageMonitor:
         try:
             disk = self.guard.check(self.path)
         except OSError:
+            self.status.update_metrics(disk_pressure="unknown")
             self.status.update_component("recording", "error", "錄影磁碟無法讀取")
             self._trip()
             return None
         self.status.update_metrics(
             free_gib=disk.free_gib,
+            used_gib=disk.used_bytes / 1024**3 if disk.used_bytes is not None else None,
             disk_pressure=disk.pressure.value,
         )
         if disk.pressure is DiskPressure.STOP:
@@ -139,6 +141,7 @@ class StorageMonitor:
             if self._stop.is_set():
                 return
             try:
+                self.status.update_metrics(disk_pressure="unknown")
                 self.status.update_component(
                     "recording", "error", "磁碟監督 worker 執行失敗"
                 )

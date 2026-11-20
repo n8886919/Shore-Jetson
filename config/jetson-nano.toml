@@ -49,6 +49,7 @@ maximum = 1.0
 [web]
 # Trusted private LAN; no router forwarding.
 allow_lan = true
+# Existing option name enables the H.265 WebRTC preview.
 h264_preview = true
 host = "0.0.0.0"
 port = 80

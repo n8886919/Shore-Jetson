@@ -1,0 +1,9 @@
+[Unit]
+Description=Wake recording backup after an eligible clip is finalized
+
+[Path]
+DirectoryNotEmpty=%h/.local/share/shore-tracker/data/manual-recordings/.backup-wake
+Unit=shore-recording-backup.service
+
+[Install]
+WantedBy=default.target

@@ -8,7 +8,7 @@ Source/host checks are separate from deployment and physical acceptance.
 ```text
 Camera -- dedicated Ethernet --> Jetson --> local 1024x600 kiosk
                                    |-- full-frame recognition and tracking
-                                   |-- ten-minute MKV, no audio
+                                   |-- requested event MKV, no audio
                                    `-- angle planner / m0_pulse --> USB CH340G
                                                                   `-- M0/M1 --> PWM servos
 ```
@@ -89,8 +89,7 @@ proximity and inference cadence can all force scale 1.0, the widest FOV.
 `TrackingCoordinator.on_decision` feeds `RecordingTriggers` after target selection.
 A separate worker starts the event recorder during the chasing trial and
 finishes on abandoned trial, ride completion, loss timeout, DISARM or stale
-inference. An automatic clip that never qualified is deleted only after the
-recorder has stopped; its discard metadata is retained and not uploaded. Continuous mode adds a trigger for the entire confirmed ARM session, independent of target decisions.
+inference. Every finalized clip wakes the Drive backup worker. Chase-only trials go under the capture date’s `fail/` folder; confirmed rides and clips with manual or continuous triggers go directly under the date. Continuous mode adds a trigger for the entire confirmed ARM session, independent of target decisions.
 The UI replaces manual start/stop with a persisted continuous-mode switch (default off).
 Changing it while DISARMED never starts recording; STOP/fault DISARM releases its request.
 Continuous clips are retained without a qualifying surfer. Mode changes share the existing event clip,
@@ -98,14 +97,11 @@ so disabling continuous never cuts an active automatic event. The legacy manual 
 for compatibility, with the same independent trigger behavior. Finalizing an old clip does not discard
 pending requests. Recording IO is not performed in the inference callback.
 
-Finalized event clips, trigger/target metadata and SHA-256 are exposed only on
-the loopback API. The computer receiver uses an SSH tunnel and the shared
-`surf_track.drive.upload` transport to upload them privately. The receiver
-reconnects/retries while it is running, and does not delete uploaded originals. Opening
-the web UI with `deploy/open-web` also starts the receiver if necessary.
+The Nano backup service verifies both an H.264 MP4 and a midpoint JPEG on Drive before freeing the finalized recording. A receipt and the date-based name reservation survive restarts. See `deploy/manual-recording.md`.
 
-The continuous 600-second original-stream MKV sequence remains a separate local
-backup without automatic upload. Neither recording path includes audio.
+The preview pipeline has no recording sink. Startup and camera reconnects never
+create background MKV segments; all local footage comes from the shared trigger
+recorder above. Audio is not recorded.
 
 The deployment enables a dedicated camera NetworkManager profile at boot,
 loads a narrow nftables route guard, runs the app as an unprivileged account
@@ -151,7 +147,7 @@ the dashboard by IP. Host checks match the accepted socket's local IP, and POSTs
 require the same origin. Native frame paths and desktop window actions remain
 loopback-only. No router forwarding is configured.
 
-`web.h264_preview=true` adds an on-demand, bounded appsrc → NVENC H.264 → MPEG-TS
+`web.h264_preview=true` adds an on-demand, bounded appsrc → NVENC H.265 → MPEG-TS
 branch from the same native frames. A loopback go2rtc relay supplies WebRTC via
 the dashboard's SDP endpoint; only media uses port 18555. Closing the last viewer
 releases the encoder after the relay disconnects. The browser falls back to JPEG

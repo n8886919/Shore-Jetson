@@ -98,3 +98,7 @@ button.stop-control { min-height: 44px; background: #421c22; color: #ffecee; bor
 .ios-switch input:disabled { cursor: default; }
 .ios-switch input:disabled + .switch-track { opacity: .45; }
 @media (prefers-reduced-motion: reduce) { .switch-track, .switch-track::after { transition: none; } }
+
+.manual-speed input[type="number"] { box-sizing: border-box; width: 100%; min-height: 36px; padding: 5px 9px; border: 1px solid #38545b; border-radius: 7px; background: #13252a; color: #ecf7f5; font: inherit; }
+.manual-speed input:disabled { opacity: .5; }
+#manualSpeedMessage:empty { display: none; }

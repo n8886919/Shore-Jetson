@@ -109,7 +109,7 @@ directions.forEach(button => {
 });
 const keys = {ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right'};
 window.addEventListener('keydown', event => {
-  if (drawer?.getAttribute('aria-hidden') === 'true' || document.hidden) return;
+  if (!status.available || drawer?.getAttribute('aria-hidden') === 'true' || document.hidden) return;
   if (['Escape', ' '].includes(event.key)) {event.preventDefault(); if (!event.repeat) stop(true); return;}
   if (!keys[event.key] || !panel.contains(event.target) || ['INPUT', 'SELECT', 'TEXTAREA'].includes(event.target.tagName)) return;
   event.preventDefault(); if (!event.repeat) start(keys[event.key]);

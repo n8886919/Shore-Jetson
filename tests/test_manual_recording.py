@@ -137,7 +137,7 @@ def test_http_recording_flow_does_not_restart_preview(tmp_path):
         thread.join(timeout=2)
 
 
-def test_unqualified_automatic_trial_deletes_only_its_new_video(tmp_path):
+def test_unqualified_trial_is_available_for_review(tmp_path):
     old = tmp_path / 'previous-success.mkv'
     old.write_bytes(b'keep historical recording')
     rec=recorder(tmp_path)
@@ -145,10 +145,9 @@ def test_unqualified_automatic_trial_deletes_only_its_new_video(tmp_path):
     wait_for(rec,{'recording'})
     rec.command('stop');wait_for(rec,{'idle'})
     item=rec.recordings()[0]
-    assert item['state']=='discarded'
-    assert not list((tmp_path/item['id']).glob('*.mkv'))
+    assert item['state']=='ready' and not item['qualified']
+    assert rec.file(item['id']).is_file()
     assert old.read_bytes()==b'keep historical recording'
-    with pytest.raises(ValueError):rec.file(item['id'])
 
 
 @pytest.mark.parametrize('manual', [False,True])
@@ -182,3 +181,21 @@ def test_enabling_continuous_during_unqualified_trial_preserves_that_clip(tmp_pa
     item=rec.recordings()[0]
     assert item['state']=='ready' and not item['qualified']
     assert set(item['triggers'])=={'tracking','continuous'}
+
+
+@pytest.mark.parametrize(('trigger', 'qualified'), [
+    ('tracking', False), ('tracking', True),
+    ('manual', False), ('continuous', False),
+])
+def test_finalized_recording_wakes_backup(tmp_path, trigger, qualified):
+    rec = recorder(tmp_path)
+    rec.command('start', trigger=trigger)
+    wait_for(rec, {'recording'})
+    if qualified:
+        rec.note_trigger('tracking', 1, qualified=True)
+    rec.command('stop')
+    wait_for(rec, {'idle'})
+    rec.close()
+    item, = rec.recordings()
+    assert item['state'] == 'ready'
+    assert (tmp_path / '.backup-wake' / item['id']).is_file()

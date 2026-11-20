@@ -27,6 +27,7 @@ from shore_tracker.inference import (
     TrackObservation,
 )
 from shore_tracker.status import StatusStore
+from shore_tracker.servo.keyboard import KeyboardJog
 from shore_tracker.control.velocity import VelocityPlanner, VelocityPlannerConfig
 
 
@@ -54,6 +55,7 @@ class TrackingCoordinator:
         command_axes: Callable[[float, float | None], None] | None = None,
         disable_tilt: Callable[[], None] | None = None,
         command_velocity: Callable[[int, int, int], None] | None = None,
+        pause_output: Callable[[], None] | None = None,
     ) -> None:
         if not 0 < tracking.frame_stale_seconds <= MAX_FRAME_STALE_SECONDS:
             raise ValueError(
@@ -73,6 +75,7 @@ class TrackingCoordinator:
         self.command_target = command_target
         self.command_axes = command_axes
         self.disable_tilt = disable_tilt
+        self._pause_output = pause_output
         self._pelco = servo.protocol == "pelco_d"
         self.command_velocity = command_velocity
         if self._pelco and command_velocity is None:
@@ -85,6 +88,7 @@ class TrackingCoordinator:
             raise ValueError("俯仰控制尚未校準或未連接")
         self.tilt_enabled = servo.tilt_enabled
         self.clock = clock
+        self.keyboard = KeyboardJog(servo, status, command_axes, pause_output, clock)
         self.on_decision = on_decision
         self.home_deg = None if self._pelco else servo.home_deg
         self.frame_stale_seconds = tracking.frame_stale_seconds
@@ -215,6 +219,7 @@ class TrackingCoordinator:
         *,
         now: float | None = None,
         inference_run_id: int | None = None,
+        captured_at: float | None = None,
     ) -> FollowDecision:
         timestamp = self.clock() if now is None else now
         self._consume_reset()
@@ -225,7 +230,7 @@ class TrackingCoordinator:
         if not self.status.update_observations(items, inference_run_id=inference_run_id):
             return FollowDecision(FollowState.SEARCHING, None, None, FollowDecisionReason.SEARCHING)
         previous_frame_at = self._last_frame_at
-        self._last_frame_at = timestamp
+        self._last_frame_at = timestamp if captured_at is None else captured_at
         # The single inference loop publishes readiness after a completed frame.
         armed = bool(self.status.snapshot()["tracking"]["armed"])
         if not armed:
@@ -281,9 +286,32 @@ class TrackingCoordinator:
         return decision
 
     @_serialized
+    def update_locked_position(self, run_id, track_id, box):
+        # Position alone never qualifies a ride or extends its detection deadline.
+        self._consume_reset()
+        run = self.status.inference_run()
+        decision = self._decision
+        if (run is None or run[0] != run_id or self._decision_run_id != run_id
+                or decision is None or decision.target is None
+                or decision.target_track_id != track_id or not self.status.snapshot()['tracking']['armed']):
+            return
+        if box is None:
+            self._decision = None
+            if self._pause_output is not None:
+                self._pause_output()
+            return
+        target = decision.target
+        target = replace(target, detection=replace(target.detection, box=box))
+        self._decision = replace(decision, target=target)
+        self.status.update_target(mode=decision.state.value, track_id=track_id,
+            target_x=box.center_x, chasing_wave=target.action.chasing_wave,
+            takeoff=target.action.takeoff, surfing=target.action.surfing,
+            reason=decision.reason.value)
+
+    @_serialized
     def check_freshness(self, *, now: float | None = None) -> bool:
         timestamp = self.clock() if now is None else now
-        if self._last_frame_at is None:
+        if self.status.inference_run() is None or self._last_frame_at is None:
             return False
         age = max(0.0, timestamp - self._last_frame_at)
         self.status.update_metrics(inference_frame_age_ms=round(age * 1000))
@@ -302,11 +330,18 @@ class TrackingCoordinator:
     def control_step(self, *, now=None):
         timestamp = self.clock() if now is None else now
         self._consume_reset()
+        self.keyboard.expire()
         if not self.status.snapshot()['tracking']['armed']:
             self.planner.reset()
             self.tilt_planner.reset()
             self._decision = None
             self._was_armed = False
+            return
+        if not self.status.snapshot()['inference']['enabled']:
+            self._decision = None
+            self.current_angle_deg, self.current_tilt_deg = self.keyboard.step(
+                self.current_angle_deg, self.current_tilt_deg)
+            self.status.update_metrics(servo_angle_deg=self.current_angle_deg, tilt_angle_deg=self.current_tilt_deg)
             return
         if self._decision is None or not self.check_freshness(now=timestamp):
             return
@@ -344,6 +379,29 @@ class TrackingCoordinator:
             self.current_tilt_deg = tilt
             self.status.update_metrics(tilt_angle_deg=tilt)
         self.status.update_metrics(servo_angle_deg=angle)
+
+    @_serialized
+    def set_inference_enabled(self, enabled):
+        if type(enabled) is not bool:
+            raise ValueError('AI 辨識設定必須為開啟或關閉')
+        if self.status.snapshot()['inference']['enabled'] == enabled:
+            return
+        self.keyboard.stop()
+        self.status.set_inference_enabled(enabled)
+        if not enabled and self.keyboard.config.protocol != 'm0_pulse':
+            self.status.disarm('AI 辨識已關閉')  # Preserve historical non-PWM STOP semantics.
+        self._tracking_reset.set()
+        self._consume_reset()
+        self._last_frame_at = None
+        self.zoom_planner.reset()
+
+    @_serialized
+    def keyboard_snapshot(self):
+        return self.keyboard.snapshot()
+
+    @_serialized
+    def keyboard_command(self, action, values):
+        return self.keyboard.command(action, values)
 
     def start(self):
         with self._lock:

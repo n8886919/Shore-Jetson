@@ -18,7 +18,7 @@ def fixture_test(monkeypatch, pan=-1, tilt=-1):
 
     def factory():
         client = SimpleServoClient(Writer(), angle_min_deg=70, angle_max_deg=110,
-            tilt_min_deg=50, tilt_max_deg=130, protocol='m0_pulse', pan_channel=0, tilt_channel=1)
+            tilt_min_deg=70, tilt_max_deg=110, protocol='m0_pulse', pan_channel=0, tilt_channel=1)
         monkeypatch.setattr(client, '_run', lambda: None)
         clients.append(client)
         return ServoService(client, StatusStore())
@@ -48,12 +48,12 @@ def test_relative_sequence_channels_endpoints_and_bounded_command_trajectory(mon
         assert phases == ['center','left','right','up','down','complete']
         assert endpoints['left'] == pytest.approx((90 - 20*direction, 90))
         assert endpoints['right'] == pytest.approx((90 + 20*direction, 90))
-        assert endpoints['up'] == pytest.approx((90 + 20*direction, 90 - 40*direction))
+        assert endpoints['up'] == pytest.approx((90 + 20*direction, 90 - 20*direction))
         assert samples[-1] == pytest.approx((90 + 20*direction, 90))
-        assert 46 < now[0] < 50, 'larger moves keep the original low speed'
+        assert 34 < now[0] < 36, 'half tilt excursion keeps the original low speed'
         assert clients[-1].writer.writes[0] == b'#00P1500!#01P1500!'
         assert not clients[-1].snapshot().armed
-        assert all(70 <= pan <= 110 and 50 <= tilt <= 130 for pan, tilt in samples)
+        assert all(70 <= pan <= 110 and 70 <= tilt <= 110 for pan, tilt in samples)
         for axis in (0, 1):
             velocities = [(b[axis]-a[axis])/.025 for a,b in zip(samples,samples[1:])]
             assert max(map(abs, velocities)) <= 5.01

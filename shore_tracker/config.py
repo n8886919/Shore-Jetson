@@ -14,6 +14,7 @@ class ConfigError(ValueError):
 
 
 MAX_FRAME_STALE_SECONDS = 2.0
+PWM_MANUAL_TILT_LIMITS_DEG = (70.0, 110.0)
 
 
 @dataclass(frozen=True)
@@ -397,9 +398,9 @@ def validate_config(cfg: AppConfig) -> None:
     if cfg.zoom.zoom_in_per_second <= 0 or cfg.zoom.zoom_out_per_second <= cfg.zoom.zoom_in_per_second:
         raise ConfigError("zoom must pull out faster than it pushes in")
     if cfg.web.h264_preview and cfg.camera.preview_fps != 10:
-        raise ConfigError("H.264 preview currently requires camera.preview_fps=10")
+        raise ConfigError("H.265 preview currently requires camera.preview_fps=10")
     if cfg.web.h264_preview and not cfg.camera.native_display:
-        raise ConfigError("H.264 preview requires camera.native_display")
+        raise ConfigError("H.265 preview requires camera.native_display")
     if cfg.web.host not in {"127.0.0.1", "::1", "localhost"} and not (cfg.web.allow_lan and cfg.web.host == "0.0.0.0"):
         raise ConfigError("web.host must remain loopback-only")
     if not 1 <= cfg.web.port <= 65535 or cfg.web.preview_stale_seconds <= 0:

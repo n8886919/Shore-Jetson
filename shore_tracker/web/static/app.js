@@ -1,7 +1,7 @@
 const names = {camera: '相機', inference: '辨識', servo: '追蹤', recording: '錄影'};
 const $ = (id) => document.getElementById(id);
 const score = (value) => value == null ? 0 : Number(value);
-const phaseNames = {disarmed: '已停止', arming: '啟動中', searching: '等候目標 · 90°', chasing: '追浪試拍 · 等待起乘', takeoff: '起乘', surfing: '衝浪', finished: '返回 90°'};
+const phaseNames = {manual: '方向鍵手動控制', disarmed: '已停止', arming: '啟動中', searching: '等候目標 · 90°', chasing: '追浪試拍 · 等待起乘', takeoff: '起乘', surfing: '衝浪', finished: '返回 90°'};
 let tuningLoaded = false;
 let statusPending = false;
 let detectionItems = [];
@@ -61,8 +61,10 @@ function renderSystemStatus(data) {
   });
   const disk = document.createElement('span');
   disk.className = 'status-disk';
-  disk.textContent = `磁碟:${Number.isFinite(data?.metrics?.free_gib) ? data.metrics.free_gib.toFixed(1) + 'G' : '—'}`;
-  disk.title = `可用磁碟空間（GiB） ${data?.metrics?.disk_pressure || ''}`;
+  const metrics = data?.metrics;
+  disk.textContent = !data?.offline_preview && Number.isFinite(metrics?.used_gib) && Number.isFinite(metrics?.free_gib)
+    ? `錄影空間：已用 ${metrics.used_gib.toFixed(1)} GiB／剩餘 ${metrics.free_gib.toFixed(1)} GiB`
+    : '錄影空間：尚無資料';
   const file = document.createElement('span');
   file.className = 'status-file';
   file.textContent = `檔案:${data?.metrics?.last_recording || '—'}`;
@@ -101,6 +103,8 @@ function showTuning() {
 }
 
 function render(data) {
+  window.shoreInferenceControl?.render(data);
+  window.shoreKeyboardControl?.render(data);
   offlinePreview = data.offline_preview === true;
   tuningReady = true;
   const recording = data.manual_recording || {state: 'unavailable'};
@@ -192,6 +196,8 @@ async function refresh() {
     $('armButton').disabled = offlinePreview || trackingPending;
     renderSystemStatus(null);
     logChange('connection', 'offline', '服務連線中斷');
+    window.shoreInferenceControl?.disconnect();
+    window.shoreKeyboardControl?.disconnect();
     streamNeedsReconnect = true;
     cameraArmed = true;
     updateCameraButtons();

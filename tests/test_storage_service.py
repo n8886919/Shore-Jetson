@@ -19,7 +19,7 @@ class FakeGuard:
 
 
 def _disk(pressure: DiskPressure, gib: int) -> DiskStatus:
-    return DiskStatus(pressure, gib * 1024**3, 500 * 1024**3)
+    return DiskStatus(pressure, gib * 1024**3, 500 * 1024**3, (499 - gib) * 1024**3)
 
 
 def _eventually(predicate, timeout=1.0) -> None:
@@ -45,6 +45,7 @@ def test_warning_reports_metric_without_stopping_recording(tmp_path: Path) -> No
     assert result is not None
     assert result.pressure is DiskPressure.WARNING
     assert stops == []
+    assert status.snapshot()["metrics"]["used_gib"] == 389
     snapshot = status.snapshot()
     assert snapshot["components"]["recording"]["state"] == "ready"
     assert snapshot["metrics"]["disk_pressure"] == "warning"
@@ -81,7 +82,10 @@ def test_disk_error_fails_closed(tmp_path: Path) -> None:
         on_stop=lambda: stops.append(True),
     )
 
+    status.update_metrics(used_gib=10, free_gib=50)
     assert monitor.check_once() is None
+    assert status.snapshot()["metrics"]["used_gib"] is None
+    assert status.snapshot()["metrics"]["free_gib"] is None
     assert stops == [True]
     assert "operator path" not in repr(status.snapshot())
 

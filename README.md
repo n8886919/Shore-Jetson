@@ -15,14 +15,14 @@ configuration still require physical verification; dated tests do not establish 
 of the reassembled setup. General TOML examples still select disabled Pelco-D/Moxa,
 and the named M0 profile also contains old, unverified settings. This documentation
 does not make either ready for deployment. The source defaults now use horizontal
-M0 and vertical M1; verify the installed device settings separately.
+M0 and vertical M1; the installed device settings still need a separate update.
 See the [current control contract](docs/servo-controller.md)
 and [hardware](docs/hardware.md).
 
 The owner now specifies horizontal **M0** and vertical **M1**. The settings drawer's
-**雲台測試** button requests both axes at 90°, then relative left 20°, right 40°,
-up 40° and down 40°, with live step text and a stop button. It ends at centre-right
-20° and vertical centre. Test and tracking writers are exclusive; dismissal,
+**雲台測試** button requests both axes at 90°, then relative left 5°, right 10°,
+up 10° and down 10°, with live step text and a stop button. It ends at centre-right
+5° and vertical centre. Test and tracking writers are exclusive; dismissal,
 connection loss and a heartbeat timeout cancel the test. Completion is a command
 result, not measured position. See [the PWM test contract](docs/servo-controller.md#pwm-雲台測試按鈕).
 
@@ -41,10 +41,9 @@ The current policy is defined by the user's 2026-09-05 clarification:
 3. Lock the first qualifying takeoff from that chasing pool and begin following
    that tracker. A directly observed chase-to-surfing transition is also valid.
 4. If chasing ends without a qualifying takeoff/ride, stop the trial, request the
-   filming reference direction and delete that new automatic video. It is never uploaded.
+   filming reference direction and retain the completed trial for review.
 5. Once qualified, follow through takeoff/surfing. When both end or the target is
-   lost beyond the grace period, finalize and upload the clip privately through
-   the existing `surf-track` receiver. Returning to chasing also ends the ride.
+   lost beyond the grace period, finalize and queue the clip for the Nano Drive backup. Returning to chasing also ends the ride.
 6. The manual start/end button is additional: it can start a recording without
    ARM or preserve/extend a trial. Overlapping triggers share one clip; a clip
    with any manual trigger is kept for labeling even if the automatic trial fails.
@@ -62,11 +61,11 @@ key is accepted only for compatibility and ignored.
 
 After the qualified ride grace expires, the intended policy returns to the filming reference direction.
 The PWM angle planner can request the configured `home_deg`, but its default 90°
-is not a measured position or a verified filming reference for the current assembly. Background ten-minute MKV
-segments remain a separate local backup, not the successful event clips above.
-Only the video belonging to a newly failed automatic trial is deleted; existing
-recordings and Drive files are untouched. Small discard metadata is retained so
-the UI can report that the trial was discarded.
+is not a measured position or a verified filming reference for the current assembly.
+Connecting the camera, opening the UI or restarting the service does not record video.
+Local recording starts only through the manual, automatic-following or ARM-session
+continuous trigger, whose state is exposed in the UI.
+A finalized chase-only trial is archived under the capture date’s `fail/` folder. Confirmed rides, manual clips and continuous recordings go directly under the date. The independent backup worker releases local video only after verifying the cloud MP4 and its midpoint JPEG.
 
 PWM pan uses image-error proportional control with bounded requested angles, speed
 and acceleration. Inference always sees the original wide
@@ -111,7 +110,7 @@ The real runtime's `serve` command starts camera/recording components; use it on
 within an authorized device task following [commissioning](docs/commissioning.md).
 The desktop now uses the native C++/Qt App; its footer shows the current LAN
 `IP` without a scheme or `:80`; other ports display as `IP:port`. The Nano profile opts into private-LAN Web access,
-with hardware H.264/WebRTC and JPEG fallback. Generic profiles remain loopback-only.
+with hardware H.265/WebRTC and JPEG fallback. Generic profiles remain loopback-only.
 See [native desktop and streaming](docs/streaming.md) for setup and measured scope.
 
 - `/` and `/kiosk`: the current physical display and primary UI target are
@@ -142,18 +141,25 @@ An optional 1–10 Hz cap remains available for diagnostic clients. Each pass ta
 the newest frame and skipped frames never form a queue. The live image is never
 held back for inference; the latest valid boxes are drawn on the newest image.
 
+During tracking, the AI switch can be turned off for keyboard pan/tilt control:
+hold an arrow key to keep moving, release to stop new targets, and turn AI back on
+to resume automatic following. This uses the configured PWM axis limits and a
+0.5-second input lease; recording does not lock the AI switch. See the
+[control contract](docs/servo-controller.md#pwm-方向鍵手動控制).
+
 Tracking changes from 開始追蹤 to 取消啟動 or 停止追蹤 according to reported state.
 Status loss permits STOP but never a new ARM request. Lens adjustments require
 tracking to be stopped. PWM angle values are requested values, not measured position.
 
-The control page retains read-only `/api/diagnostics` and automatic camera recovery.
-Native and Web interfaces have no manual camera reconnect button. Recovery
-status updates automatically and clears when video is ready. Servo faults
+The control page retains read-only `/api/diagnostics` and queued camera recovery.
+The backup button is labelled **重新連接相機**. Its progress follows live recovery
+state and disappears when video is ready; no page refresh is needed. Servo faults
 are labelled **舵機未連線**. With the owner's current dual 180° PWM servos
 (`m0_pulse`, CH340G USB-TTL → M0/M1), the supervisor automatically retries a
 missing or failed UART after closing its previous owner. Recovery stays DISARMED,
 discards old targets and requires a fresh manual ARM; it does not restart video.
-Recovery remains DISARMED. Incomplete fragments are
+Manual reconnection is rejected while tracking or event recording is active,
+queued or finalizing. Recovery remains DISARMED. Incomplete fragments are
 retained without claiming successful finalization. Unknown resource ownership
 blocks replacement. No camera passwords or stream URLs are exposed.
 
@@ -185,7 +191,7 @@ head-only motion and 42 zero-RX probes apply to that head, not these PWM servos.
 Historical wiring, manual controls and capabilities are retained in the
 [RS485 reference](docs/pelco-d-test.md) and [control contract](docs/servo-controller.md#歷史-rs485-雲台已收起).
 
-Completed clips are queued for the computer receiver and private Drive upload.
+Eligible completed clips are queued for the event-driven Nano Drive backup.
 Offline clips remain on Jetson. Preview zoom is digital; optical zoom is separate.
 The native JetPack/TensorRT runtime uses exported ONNX detector/action models.
 Software tests do not establish physical motion or recording acceptance.

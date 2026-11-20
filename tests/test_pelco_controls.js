@@ -121,6 +121,9 @@ function harness() {
   const automatic = harness(); await tick(); automatic.setStatus({tracking_active:true}); await automatic.poll();
   await automatic.element('panTiltConnect').click();
   assert.equal(automatic.posts.length,0,'automatic tracking blocks manual connection');
+  const pwm = harness(); await tick(); pwm.setStatus({available:false,tracking_active:true}); await pwm.poll();
+  pwm.events.keydown({...key,key:'Escape'}); await tick();
+  assert.equal(pwm.posts.length,0,'hidden Pelco panel must not cancel PWM keyboard control');
   const preview = harness(); await tick(); preview.setStatus({offline_preview:true}); await preview.poll();
   await preview.element('panTiltConnect').click(); await preview.element('panTiltStop').click();
   assert.equal(preview.posts.length,0,'offline preview never opens or stops hardware');

@@ -8,7 +8,7 @@ let current={components:{camera:{state:'ready'},inference:{state:'ready'},servo:
 const diagnostic={available:true,recovery:{state:'ready',attempts:0},video:{},servo:{},inference:{max_fps:2}};
 let offline=false;
 const requests=[];
-const context=vm.createContext({document:{getElementById:get,createElement:element,querySelectorAll:()=>lens},location:{search:'?mode=kiosk'},URLSearchParams,setInterval(){},Date,Number,String,Object,Math,AbortSignal,
+const context=vm.createContext({window:{},document:{getElementById:get,createElement:element,querySelectorAll:()=>lens},location:{search:'?mode=kiosk'},URLSearchParams,setInterval(){},Date,Number,String,Object,Math,AbortSignal,
 fetch:async(path,options={})=>{if(offline)throw new Error('offline');if(options.method==='POST'){const body=JSON.parse(options.body);requests.push([path,body]);if(path==='/api/tuning')current.tuning=body;if(path==='/api/recording/mode')current.manual_recording.continuous_enabled=body.continuous;if(path==='/api/inference/rate')diagnostic.inference.max_fps=body.max_fps;return {ok:true,json:async()=>({ok:true})}}return {ok:true,json:async()=>path==='/api/status'?current:path==='/api/diagnostics'?diagnostic:{ok:true,zoom:true,focus:true}}}});
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{

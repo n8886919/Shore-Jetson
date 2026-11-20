@@ -30,11 +30,13 @@ class DecodedFrames:
         self._frame: DecodedFrame | None = None
         self._sequence = 0
         self._generation = 0
+        self._camera_generation = None
 
     def begin_session(self, *, camera_generation: int = 0):
         with self._condition:
             self._generation += 1
             generation = self._generation
+            self._camera_generation = camera_generation
             self._frame = None
             self._condition.notify_all()
 
@@ -51,6 +53,10 @@ class DecodedFrames:
                                            camera_generation, source_pts_ns)
                 self._condition.notify_all()
         return publish
+
+    def is_current_generation(self, generation):
+        with self._condition:
+            return generation == self._camera_generation
 
     def wait_after(self, sequence: int, timeout: float) -> DecodedFrame | None:
         with self._condition:

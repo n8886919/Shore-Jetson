@@ -70,7 +70,8 @@ button.stop { color: #ffecee; background: #421c22; border-color: var(--red); }
 .status-light { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; }
 .status-light::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
 .status-light.ready::before { background: #43d989; }
-.status-disk { flex-shrink: 0; }
+.status-line { flex-wrap: wrap; }
+.status-disk { white-space: normal; }
 .status-file { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tuning button { min-height: 32px; color: #d9f6f2; background: #183137; border-color: #426269; }
 .compact { display: grid; grid-template-columns: auto 1fr; gap: 12px; font-size: 11px; margin-top: auto; }
@@ -130,3 +131,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--cyan); outline-
 .ios-switch input:disabled { cursor: default; }
 .ios-switch input:disabled + .switch-track { opacity: .45; }
 @media (prefers-reduced-motion: reduce) { .switch-track, .switch-track::after { transition: none; } }
+
+.manual-speed input[type="number"] { box-sizing: border-box; width: 100%; min-height: 36px; padding: 5px 9px; border: 1px solid #38545b; border-radius: 7px; background: #13252a; color: #ecf7f5; font: inherit; }
+.manual-speed input:disabled { opacity: .5; }
+#manualSpeedMessage:empty { display: none; }

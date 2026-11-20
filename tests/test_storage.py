@@ -21,10 +21,11 @@ Usage = namedtuple("Usage", "total used free")
 def test_disk_guard_thresholds(monkeypatch, tmp_path, free_gib, expected) -> None:
     monkeypatch.setattr(
         "shore_tracker.storage.shutil.disk_usage",
-        lambda _path: Usage(500 * 1024**3, 0, free_gib * 1024**3),
+        lambda _path: Usage(500 * 1024**3, (499 - free_gib) * 1024**3, free_gib * 1024**3),
     )
     status = DiskGuard(120, 100).check(tmp_path)
     assert status.pressure is expected
+    assert status.used_bytes == (499 - free_gib) * 1024**3
 
 
 def test_disk_guard_rejects_inverted_thresholds() -> None:

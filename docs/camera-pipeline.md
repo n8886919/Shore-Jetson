@@ -15,9 +15,8 @@ to `rtspsrc`; it is never placed in TOML, command arguments or UI status.
 
 ```text
 rtspsrc (TCP video only)
-  -> H.264/H.265 depay + parse -> tee
-       |-> splitmuxsink -> Matroska segments, requested every 600 s
-       `-> Jetson decode -> bounded leaky JPEG preview -> UI and inference
+  -> H.264/H.265 depay + parse
+  -> Jetson decode -> bounded leaky JPEG preview -> UI and inference
 ```
 
 `camera.rotation_degrees` accepts `0` (default) or `180`. Rotation is applied
@@ -25,26 +24,27 @@ by the Jetson converter before JPEG delivery, so kiosk preview and inference
 use the same orientation. The encoded recording branch retains the camera
 source orientation.
 
-Audio is not linked. The UI/inference branch is bounded and leaky so a slow
-consumer cannot stall recording. File names include local date, process-session
-ID and a segment counter. These background segments remain on disk without upload or automatic deletion.
+Audio is not linked. The UI/inference branch is bounded and leaky. The runtime
+always builds this preview pipeline without a recording sink, including after
+errors and reconnects. Opening the UI or connecting the camera creates no
+background recordings. Existing segment files remain available in the file browser.
 
 Automatic following and the additional manual trigger share a separate encoded
 RTSP-to-MKV event recorder. It opens only while requested and waits for EOS before
 publishing the completed clip and SHA-256. This does not re-encode the video or
-restart the preview pipeline. The completion API feeds the private Drive receiver;
-Failed/partial manual or qualified event files are preserved but never presented
-as complete. A new automatic trial that never qualified and had no manual trigger
-is discarded, including its partial video; existing recordings are untouched.
+restart the preview pipeline. On finalization the Nano notifies the backup worker.
+A completed chase-only trial is archived under the capture date’s `fail/` folder.
+Confirmed rides and manual or continuous clips use the date folder. Partial files
+remain on the card for recovery.
 
 Camera start is retried. Terminal pipeline state or a preview stall disarms the
 tracker, stops that pipeline and builds a new one. The old preview callback
 cannot replace the active preview. Disk pressure pauses recording rather than
 deleting footage.
 
-`splitmuxsink` splits on keyframes, so the actual file duration can exceed 600
-seconds by the source GOP interval. Authenticated decode, reconnect behaviour
-and long-running segment cuts still require a Jetson field canary.
+The low-level pipeline builder retains its segmented-sink compatibility code, but
+the application runtime never selects it. Authenticated decode, reconnect behaviour
+and event recording still require a Jetson field canary.
 
 ## Independent preview and inference rates
 

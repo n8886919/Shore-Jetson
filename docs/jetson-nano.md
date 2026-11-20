@@ -244,8 +244,6 @@ detector cls／box／centerness 最大絕對誤差分別為 0.03623／0.07492／
 
 `deploy/clean-nano-system.py` 預設只顯示移除計畫；在已授權清理的 Nano 上，
 使用 `sudo python3 clean-nano-system.py --apply` 才會刪除。
-報告儲存於呼叫 sudo 的使用者家目錄；直接以 root 執行時，需以 `--user USER`
-明確指定非 root 的報告擁有者，不使用寫死的個人目錄。
 工具以明確套件清單和已審查的連帶移除清單作限制，不執行 blanket autoremove。
 GPU 執行庫、Wi-Fi、SSH、桌面及系統設定工具保留。
 開發用 headers／static libraries 與執行庫分開處理；移除前者後仍須驗證引擎

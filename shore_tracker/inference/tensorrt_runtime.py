@@ -440,7 +440,7 @@ class TensorRtSurfTrackModels:
             image = source.convert("RGB")
         return self.infer_image(image)
 
-    def infer_image(self, image: Image.Image) -> tuple[TrackObservation, ...]:
+    def infer_image(self, image: Image.Image, *, position_hint=None) -> tuple[TrackObservation, ...]:
         """Accept a decoded frame without a lossy JPEG round trip."""
         if self.detector is None or self.action is None:
             raise RuntimeError("models are not loaded")
@@ -451,7 +451,7 @@ class TensorRtSurfTrackModels:
             resized_height=resized_height,
             score_threshold=self.score_threshold,
         )
-        detections = self.tracker.update(raw)
+        detections = self.tracker.update(raw, position_hint=position_hint)
         if not detections:
             return ()
         logits = self.action.infer(prepare_action_input(image, raw))["action_logits"]

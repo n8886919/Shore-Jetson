@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import errno
 import mimetypes
+import os
 import re
 import secrets
 import shutil
@@ -12,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address, ip_network
 from importlib.resources import files
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
@@ -20,6 +22,7 @@ from shore_tracker.controller import AppController
 from shore_tracker.preview import PreviewStore
 from shore_tracker.status import StatusStore
 from shore_tracker.web.desktop import set_kiosk_compact
+from shore_tracker.web.file_browser import CardFiles, byte_range
 
 
 MAX_REQUEST_BODY_BYTES = 4096
@@ -71,6 +74,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.preview_store = preview
         self.preview_stale_seconds = preview_stale_seconds
         self.pan_tilt_token = secrets.token_urlsafe(32)
+        self.card_files = CardFiles()
         super().__init__(address, DashboardHandler)
 
 
@@ -103,7 +107,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _reject_nonlocal_host(self) -> bool:
         peer = ip_address(self.client_address[0])
-        private_peer = peer.is_loopback or any(peer in ip_address_net for ip_address_net in _LAN_NETWORKS)
+        private_peer = (
+            peer.is_loopback
+            or any(peer in network for network in _LAN_NETWORKS)
+            or (self.server.allow_lan and peer in ip_network("100.64.0.0/10"))
+        )
         if private_peer and self._valid_loopback_host():
             return False
         self._json(
@@ -131,7 +139,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != 'HEAD':
+            self.wfile.write(body)
 
     def _consume_bounded_request_body(self) -> bool:
         # Chunked input and ambiguous Content-Length values are unnecessary for
@@ -187,7 +196,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return payload if isinstance(payload, dict) else None
 
     def _static(self, name: str) -> None:
-        if name not in {"index.html", "mobile.html", "app.css", "app.js", "kiosk.css", "kiosk.js", "streaming.js", "advanced.html", "advanced.css", "advanced.js", "pan-tilt.js", "servo-test.js"}:
+        if name not in {"index.html", "mobile.html", "app.css", "app.js", "kiosk.css", "kiosk.js", "streaming.js", "advanced.html", "advanced.css", "advanced.js", "pan-tilt.js", "servo-test.js", "files.html", "files.css", "files.js", "inference-toggle.js", "keyboard-jog.js"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         body = files("shore_tracker.web.static").joinpath(name).read_bytes()
@@ -208,6 +217,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path in {"/", "/kiosk", "/kiosk/"}:
             self._static("index.html")
+        elif path in {'/files', '/files/'}:
+            self._static('files.html')
+        elif path in {'/files.css', '/files.js'}:
+            self._static(path[1:])
+        elif path == '/api/files':
+            self._card_listing()
+        elif path == '/api/files/content':
+            self._card_file()
         elif path in {"/mobile", "/mobile/"}:
             self._static("mobile.html")
         elif path in {"/control", "/control/", "/advanced", "/advanced/"}:
@@ -216,14 +233,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", "0")
             self.end_headers()
-        elif path in {"/advanced.css", "/advanced.js", "/kiosk.css", "/kiosk.js", "/streaming.js", "/pan-tilt.js", "/servo-test.js"}:
+        elif path in {"/advanced.css", "/advanced.js", "/kiosk.css", "/kiosk.js", "/streaming.js", "/pan-tilt.js", "/servo-test.js", "/inference-toggle.js", "/keyboard-jog.js"}:
             self._static(path[1:])
         elif path == "/api/stream":
-            encoder = getattr(self.server, "h264_preview", None)
+            encoder = getattr(self.server, "webrtc_preview", None)
             self._json(HTTPStatus.OK, {"webrtc": encoder is not None,
                                       "encoder_active": bool(encoder and encoder.active)})
         elif path == "/api/preview.ts":
-            encoder = getattr(self.server, 'h264_preview', None)
+            encoder = getattr(self.server, 'webrtc_preview', None)
             if not ip_address(self.client_address[0]).is_loopback or encoder is None:
                 self.send_error(HTTPStatus.FORBIDDEN)
                 return
@@ -242,6 +259,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, {**self.server.controller.pan_tilt_snapshot(),
                        "control_token": self.server.pan_tilt_token,
                        "offline_preview": self.server.status_store.snapshot().get("offline_preview", False)})
+        elif path == '/api/keyboard':
+            self._json(HTTPStatus.OK, {**self.server.controller.keyboard_snapshot(),
+                       'control_token': self.server.pan_tilt_token})
         elif path == '/api/servo-test':
             self._json(HTTPStatus.OK, {**self.server.controller.servo_test_snapshot(),
                        'control_token': self.server.pan_tilt_token,
@@ -257,6 +277,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             snapshot['metrics']['preview_fps'] = self.server.preview_store.frame_rate(
                 stale_seconds=self.server.preview_stale_seconds)
             recorder = self.server.controller.recording
+            snapshot['keyboard'] = self.server.controller.keyboard_snapshot()
             snapshot['manual_recording'] = recorder.snapshot() if recorder else {'state': 'unavailable'}
             self._json(HTTPStatus.OK, snapshot)
         elif path == "/api/preview.mjpeg":
@@ -286,6 +307,85 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK if payload["ok"] else HTTPStatus.SERVICE_UNAVAILABLE, payload)
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
+
+    def do_HEAD(self) -> None:  # noqa: N802
+        if self._reject_nonlocal_host():
+            return
+        if urlsplit(self.path).path == '/api/files/content':
+            self._card_file(head_only=True)
+        else:
+            self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _card_error(self, error: Exception) -> None:
+        if isinstance(error, ValueError):
+            status, detail = HTTPStatus.BAD_REQUEST, '檔案路徑或頁碼無效'
+        elif isinstance(error, (FileNotFoundError, NotADirectoryError)):
+            status, detail = HTTPStatus.NOT_FOUND, '找不到這個檔案或資料夾'
+        elif isinstance(error, PermissionError) or getattr(error, 'errno', None) == errno.ELOOP:
+            status, detail = HTTPStatus.FORBIDDEN, '無法讀取這個項目'
+        else:
+            status, detail = HTTPStatus.SERVICE_UNAVAILABLE, '無法讀取記憶卡，請確認卡片已掛載'
+        self._json(status, {'ok': False, 'detail': detail})
+
+    def _card_listing(self) -> None:
+        query = parse_qs(urlsplit(self.path).query)
+        try:
+            result = self.server.card_files.listing(query.get('path', [''])[0],
+                                                    int(query.get('offset', ['0'])[0]))
+        except (OSError, ValueError) as error:
+            self._card_error(error)
+            return
+        self._json(HTTPStatus.OK, result)
+
+    def _card_file(self, *, head_only: bool = False) -> None:
+        query = parse_qs(urlsplit(self.path).query)
+        relative = query.get('path', [''])[0]
+        headers_sent = False
+        try:
+            with self.server.card_files.open_path(relative) as (fd, info):
+                try:
+                    start, end, partial = byte_range(self.headers.get('Range'), info.st_size)
+                except ValueError:
+                    self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                    self.send_header('Content-Range', f'bytes */{info.st_size}')
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
+                name = relative.rsplit('/', 1)[-1]
+                kind = mimetypes.guess_type(name)[0] or 'application/octet-stream'
+                inline = kind.startswith('video/') and query.get('download', ['0'])[0] != '1'
+                self.send_response(HTTPStatus.PARTIAL_CONTENT if partial else HTTPStatus.OK)
+                self.send_header('Content-Type', kind if inline else 'application/octet-stream')
+                self.send_header('Content-Disposition', ('inline' if inline else 'attachment') +
+                                 "; filename*=UTF-8''" + quote(name, safe=''))
+                self.send_header('Content-Length', str(max(0, end - start + 1)))
+                self.send_header('Accept-Ranges', 'bytes')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('X-Content-Type-Options', 'nosniff')
+                self.send_header('X-Frame-Options', 'DENY')
+                if partial:
+                    self.send_header('Content-Range', f'bytes {start}-{end}/{info.st_size}')
+                self.end_headers()
+                headers_sent = True
+                if head_only:
+                    return
+                os.lseek(fd, start, os.SEEK_SET)
+                remaining = end - start + 1
+                while remaining > 0:
+                    chunk = os.read(fd, min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+                if remaining > 0:
+                    self.close_connection = True
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+        except (OSError, ValueError) as error:
+            if headers_sent:
+                self.close_connection = True
+            else:
+                self._card_error(error)
 
     def _display_frame(self):
         try:
@@ -333,7 +433,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.FORBIDDEN, {'ok': False})
             return
         if path == "/api/stream/webrtc":
-            if getattr(self.server, 'h264_preview', None) is None or self.headers.get_content_type() != 'application/sdp':
+            if getattr(self.server, 'webrtc_preview', None) is None or self.headers.get_content_type() != 'application/sdp':
                 self.send_error(HTTPStatus.SERVICE_UNAVAILABLE)
                 return
             offer = self._request_body
@@ -353,6 +453,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'no-store')
             self.end_headers()
             self.wfile.write(answer)
+            return
+        if path == '/api/keyboard':
+            if (self.headers.get_content_type() != 'application/json'
+                    or not secrets.compare_digest(self.headers.get('X-Pan-Tilt-Token', ''), self.server.pan_tilt_token)):
+                self._json(HTTPStatus.FORBIDDEN, {'ok': False})
+                return
+            payload = self._json_body()
+            fields = {'start': {'epoch', 'direction'}, 'move': {'session', 'sequence', 'direction'},
+                      'stop': {'epoch'}, 'speed': {'speed_deg_s'}}
+            action = payload.get('action') if payload else None
+            if (not isinstance(action, str) or action not in fields
+                    or set(payload) - {'action'} != fields[action]):
+                self._json(HTTPStatus.BAD_REQUEST, {'ok': False})
+                return
+            try:
+                result = self.server.controller.keyboard_command(action,
+                    {key: value for key, value in payload.items() if key != 'action'})
+            except (TypeError, ValueError) as exc:
+                self._json(HTTPStatus.CONFLICT, {'ok': False, 'detail': str(exc)})
+                return
+            except OSError:
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {'ok': False, 'detail': '舵機控制失敗，請停止追蹤'})
+                return
+            self._json(HTTPStatus.OK, result)
             return
         if path == '/api/servo-test':
             origin = self.headers.get('Origin')
@@ -487,6 +611,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             ok, detail = self.server.controller.camera_command(payload["action"], payload["values"])
             self._json(HTTPStatus.OK if ok else HTTPStatus.CONFLICT, {"ok": ok, "detail": detail})
+        elif path == "/api/inference":
+            payload = self._json_body()
+            if (self.headers.get_content_type() != 'application/json' or payload is None
+                    or set(payload) != {'enabled'} or type(payload['enabled']) is not bool):
+                self._json(HTTPStatus.BAD_REQUEST, {'ok': False, 'detail': 'AI 辨識設定格式無效'})
+                return
+            ok, detail = self.server.controller.set_inference_enabled(payload['enabled'])
+            self._json(HTTPStatus.OK if ok else HTTPStatus.CONFLICT,
+                       {'ok': ok, 'detail': detail, 'inference': self.server.status_store.snapshot()['inference']})
         elif path == "/api/inference/rate":
             origin = self.headers.get("Origin")
             if ((origin is not None and origin != "http://" + self.headers.get("Host", ""))

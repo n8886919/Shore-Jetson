@@ -9,7 +9,7 @@ function render() {
   panel.hidden = online && !status.available && !status.offline_preview;
   const active = busy || status.running;
   const step = stopping ? '停止中' : busy ? '啟動中' : {
-    center:'置中', left:'左 20°', right:'右 40°', up:'抬頭 40°', down:'低頭 40°'
+    center:'置中', left:'左 20°', right:'右 40°', up:'抬頭 20°', down:'低頭 20°'
   }[status.phase] || '測試中';
   button.textContent = active ? `${step}\n停止測試` : '雲台測試';
   button.classList.toggle('testing', !!active);

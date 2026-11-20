@@ -15,6 +15,9 @@ if ! ssh -S "$web_socket" -O check "$jetson_target" >/dev/null 2>&1; then
     -o StrictHostKeyChecking=yes "$jetson_target"
 fi
 web_script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-python3 "$web_script_dir/start-recording-sync.py" --ssh "$jetson_target" || true
+# Older installations still use the desktop receiver.
+if ! ssh -S "$web_socket" "$jetson_target" 'test -e ~/.config/systemd/user/default.target.wants/shore-recording-backup.path || test -e ~/.config/systemd/user/timers.target.wants/shore-recording-backup.timer'; then
+  python3 "$web_script_dir/start-recording-sync.py" --ssh "$jetson_target" || true
+fi
 printf '%s\n' 'http://127.0.0.1:18091'
 xdg-open 'http://127.0.0.1:18091' >/dev/null 2>&1 &

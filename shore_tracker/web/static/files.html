@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>記憶卡檔案 · Shore Jetson</title>
+  <link rel="stylesheet" href="/files.css">
+  <script src="/files.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/kiosk">Shore Jetson</a>
+    <a class="back-link" href="/kiosk">返回即時畫面</a>
+  </header>
+  <main>
+    <section class="heading" aria-labelledby="pageTitle">
+      <div><h1 id="pageTitle">記憶卡檔案</h1><p>Nano 的錄影與儲存檔案</p></div>
+      <button id="refresh" class="button" type="button">重新整理</button>
+    </section>
+    <section class="storage" aria-label="記憶卡空間">
+      <div class="storage-label"><span id="storageUsed">正在讀取記憶卡</span><strong id="storageFree"></strong></div>
+      <progress id="storageBar" max="100" value="0" aria-label="已使用空間"></progress>
+    </section>
+    <section class="browser" aria-label="檔案瀏覽器">
+      <div class="toolbar">
+        <nav id="breadcrumbs" aria-label="目前資料夾"></nav>
+        <label class="search"><span class="sr-only">搜尋本頁檔案</span><input id="search" type="search" placeholder="搜尋本頁檔案" autocomplete="off"></label>
+      </div>
+      <p id="message" class="message" role="status">正在讀取檔案…</p>
+      <div class="table-wrap">
+        <table id="fileTable" hidden>
+          <thead><tr><th scope="col">名稱</th><th scope="col" class="size">大小</th><th scope="col" class="modified">修改時間</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead>
+          <tbody id="entries"></tbody>
+        </table>
+      </div>
+      <div class="list-footer"><span id="itemCount"></span><div class="pages"><button id="previous" class="button" type="button" disabled>上一頁</button><button id="next" class="button" type="button" disabled>下一頁</button></div></div>
+    </section>
+  </main>
+  <dialog id="preview" aria-labelledby="previewTitle">
+    <div class="preview-heading"><h2 id="previewTitle">影片預覽</h2><button id="closePreview" class="button" type="button">關閉</button></div>
+    <video id="video" controls playsinline preload="metadata"></video>
+    <div class="preview-footer"><p id="playbackNote">若瀏覽器無法播放 MKV／H.265，請下載後使用 VLC 等播放器開啟。</p><a id="previewDownload" class="button primary" download>下載影片</a></div>
+  </dialog>
+</body>
+</html>

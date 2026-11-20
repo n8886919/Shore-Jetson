@@ -83,13 +83,13 @@ def test_read_only_load_then_exclusive_test_handoff_and_global_stop(runtime):
     assert runtime.clients[-1].writer.writes == []
 
 
-def test_fourfold_sequence_uses_test_limits_and_restores_disarmed(runtime):
+def test_half_tilt_sequence_uses_test_limits_and_restores_disarmed(runtime):
     original = runtime.config.servo
     code, result = request(runtime, 'POST', {'action': 'start', 'epoch': 0})
     assert code == 200
     client = runtime.clients[-1]
     assert (client.angle_min_deg, client.angle_max_deg) == (70, 110)
-    assert (client.tilt_min_deg, client.tilt_max_deg) == (50, 130)
+    assert (client.tilt_min_deg, client.tilt_max_deg) == (70, 110)
     for sequence in range(1, 2401):
         runtime.test_now[0] += .025
         runtime._servo_test.renew(session=result['session'], sequence=sequence)
@@ -98,7 +98,8 @@ def test_fourfold_sequence_uses_test_limits_and_restores_disarmed(runtime):
         if not runtime._servo_test.snapshot()['running']:
             break
     assert runtime._servo_test.snapshot()['phase'] == 'complete'
-    assert any(b'#01P1944!' in data for data in client.writer.writes)
+    assert any(b'#01P1722!' in data for data in client.writer.writes)
+    assert not any(b'#01P1944!' in data or b'#01P1056!' in data for data in client.writer.writes)
     assert any(b'#00P1722!' in data for data in client.writer.writes)
     assert any(b'#00P1278!' in data for data in client.writer.writes)
     runtime.controller.recover_servo()

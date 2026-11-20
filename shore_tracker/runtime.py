@@ -5,16 +5,14 @@ import math
 import signal
 import threading
 import time
-import uuid
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-from shore_tracker.camera import CameraPipeline, ClosedFragment, RtspUri, build_pipeline_spec
+from shore_tracker.camera import CameraPipeline, RtspUri, build_pipeline_spec
 from shore_tracker.camera.control import CameraControls
-from shore_tracker.config import AppConfig, validate_config
+from shore_tracker.config import AppConfig, PWM_MANUAL_TILT_LIMITS_DEG, validate_config
 from shore_tracker.controller import AppController
 from shore_tracker.manual_recording import ManualRecording
 from shore_tracker.recording_triggers import RecordingTriggers
@@ -32,7 +30,7 @@ from shore_tracker.servo.pwm_test import PwmServoTest
 from shore_tracker.status import StatusStore
 from shore_tracker.storage import DiskGuard
 from shore_tracker.storage_service import StorageMonitor
-from shore_tracker.web.h264 import H264Preview
+from shore_tracker.web.hevc import HevcPreview
 from shore_tracker.web.server import DashboardServer, make_server
 
 
@@ -57,25 +55,10 @@ def validate_direct_camera_route(rtsp_uri: RtspUri, interface: str) -> None:
         raise RuntimeError("camera route is not confined to its dedicated interface")
 
 
-def recording_pattern_for_session(
-    root: str | Path,
-    started_at: datetime,
-    session_id: str,
-) -> Path:
-    if started_at.tzinfo is None:
-        raise ValueError("started_at must be timezone-aware")
-    if not session_id.isalnum() or not 1 <= len(session_id) <= 32:
-        raise ValueError("session_id must be 1-32 alphanumeric characters")
-    local = started_at.astimezone()
-    return (
-        Path(root).expanduser().absolute()
-        / local.strftime("%Y-%m-%d")
-        / f"{local.strftime('%Y%m%dT%H%M%S')}-{session_id}-%05d.mkv"
-    )
 
 
 class ShoreTrackerRuntime:
-    """POC runtime: camera, MKV, native TensorRT, pan Servo, and kiosk UI."""
+    """Preview, requested event recording, TensorRT, servos, and kiosk UI."""
 
     def __init__(
         self,
@@ -86,7 +69,6 @@ class ShoreTrackerRuntime:
         servo_service_builder: Callable[[Any, StatusStore], ServoService] = build_servo_service,
         inference_worker_builder: Callable[..., InferenceWorker] = InferenceWorker,
         camera_route_validator: Callable[[RtspUri, str], None] = validate_direct_camera_route,
-        session_id_factory: Callable[[], str] = lambda: uuid.uuid4().hex[:12],
         utcnow: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         camera_retry_seconds: float = CAMERA_RETRY_SECONDS,
         camera_stall_seconds: float = CAMERA_STALL_SECONDS,
@@ -103,13 +85,15 @@ class ShoreTrackerRuntime:
         self.status.configure_recognition(detection=config.inference.score_threshold)
         self.preview = PreviewStore()
         self.native_frames = NativeFrames() if config.camera.native_display else None
-        self.h264_preview = H264Preview() if config.web.h264_preview else None
+        self.webrtc_preview = HevcPreview() if config.web.h264_preview else None
         self.decoded_frames = DecodedFrames()
+        self.position_frames = (DecodedFrames() if config.camera.native_display
+                                and config.camera.decoded_inference
+                                and config.servo.protocol == "m0_pulse" else None)
         self._camera_builder = camera_builder
         self._servo_service_builder = servo_service_builder
         self._inference_worker_builder = inference_worker_builder
         self._camera_route_validator = camera_route_validator
-        self._session_id_factory = session_id_factory
         self._utcnow = utcnow
         self._camera_retry_seconds = camera_retry_seconds
         self._camera_stall_seconds = camera_stall_seconds
@@ -147,6 +131,7 @@ class ShoreTrackerRuntime:
             command_axes=self._command_axes,
             disable_tilt=self._disable_tilt,
             command_velocity=self._command_velocity,
+            pause_output=self._pause_servo,
         )
         clip_recorder = ManualRecording(
             config.data_dir / "manual-recordings", self._recording_uri,
@@ -159,6 +144,7 @@ class ShoreTrackerRuntime:
             stale_seconds=config.tracking.frame_stale_seconds,
             settings_path=config.data_dir / 'recording-settings.json',
         )
+        self.status.update_component("recording", "ready", "等待錄影觸發")
         self.controller = AppController(
             self.status,
             arm_callback=self._request_servo_arm,
@@ -170,6 +156,9 @@ class ShoreTrackerRuntime:
             camera_reconnect_callback=self._request_camera_reconnect,
             servo_recovery_callback=self._check_servo_once,
             inference_rate_callback=self._set_inference_rate,
+            inference_enabled_callback=self._coordinator.set_inference_enabled,
+            keyboard_snapshot=self._coordinator.keyboard_snapshot,
+            keyboard_callback=self._coordinator.keyboard_command,
             pan_tilt_snapshot=self._pan_tilt_snapshot,
             pan_tilt_callback=self._pan_tilt_command,
             servo_test_snapshot=self._servo_test_snapshot,
@@ -189,13 +178,13 @@ class ShoreTrackerRuntime:
         )
 
         self.server.local_display = self.native_frames
-        self.server.h264_preview = self.h264_preview
+        self.server.webrtc_preview = self.webrtc_preview
         self.server.camera_interface = config.camera.interface
 
     def _publish_native_frame(self, data, width, height, stride, **metadata):
         self.native_frames.publish(data, width, height, stride, **metadata)
-        if self.h264_preview is not None:
-            self.h264_preview.publish(data, width, height, stride, **metadata)
+        if self.webrtc_preview is not None:
+            self.webrtc_preview.publish(data, width, height, stride, **metadata)
 
     def _on_follow_decision(self, decision, now):
         self.manual_recording.follow(decision, now)
@@ -282,8 +271,8 @@ class ShoreTrackerRuntime:
         finally:
             self.stop_services()
             self.server.server_close()
-            if self.h264_preview is not None:
-                self.h264_preview.close()
+            if self.webrtc_preview is not None:
+                self.webrtc_preview.close()
             if self.native_frames is not None:
                 self.native_frames.close()
 
@@ -364,19 +353,11 @@ class ShoreTrackerRuntime:
             if self._camera is not None:
                 return
             try:
-                started_at = self._utcnow()
                 rtsp_uri = RtspUri.from_environment(self.config.camera.rtsp_uri_env)
                 self._camera_route_validator(rtsp_uri, self.config.camera.interface)
-                pattern = recording_pattern_for_session(
-                    self.config.recording.root,
-                    started_at,
-                    self._session_id_factory(),
-                )
-                pattern.parent.mkdir(parents=True, exist_ok=True)
                 spec = build_pipeline_spec(
                     self.config.camera.codec,
-                    pattern,
-                    segment_seconds=self.config.recording.segment_seconds,
+                    None,
                     rtsp_latency_ms=self.config.camera.latency_ms,
                     rotation_degrees=self.config.camera.rotation_degrees,
                     preview_fps=self.config.camera.preview_fps,
@@ -387,8 +368,16 @@ class ShoreTrackerRuntime:
                 camera_options = {}
                 preview_session = self.preview.begin_session()
                 if self.config.camera.decoded_inference or self.native_frames is not None:
+                    native_sink = self._publish_native_frame if self.native_frames else None
+                    if self.position_frames is not None:
+                        publish_position = self.position_frames.begin_session(
+                            camera_generation=preview_session.generation)
+
+                        def native_sink(data, width, height, stride, **metadata):
+                            self._publish_native_frame(data, width, height, stride, **metadata)
+                            publish_position(data, width, height, stride, **metadata)
                     camera_options['factory'] = GStreamerPipelineFactory(
-                        on_native_frame=self._publish_native_frame if self.native_frames else None,
+                        on_native_frame=native_sink,
                         on_decoded_frame=self.decoded_frames.begin_session(
                             camera_generation=preview_session.generation) if self.config.camera.decoded_inference else None)
                 camera = self._camera_builder(
@@ -396,7 +385,7 @@ class ShoreTrackerRuntime:
                     preview=preview_session,
                     rtsp_uri=rtsp_uri,
                     spec=spec,
-                    on_fragment_closed=self._on_fragment_closed,
+                    on_fragment_closed=lambda _fragment: None,
                     **camera_options,
                 )
                 if camera.start():
@@ -407,7 +396,6 @@ class ShoreTrackerRuntime:
                     self.status.update_component("camera", "offline", "waiting for camera")
             except Exception:
                 self.status.update_component("camera", "offline", "camera start failed")
-                self.status.update_component("recording", "paused", "camera unavailable")
 
     def _start_inference(self) -> None:
         if not self.config.inference.enabled:
@@ -429,6 +417,7 @@ class ShoreTrackerRuntime:
             max_fps=self.config.inference.max_fps,
             on_demand=True,
             confirmation_frames=self.config.inference.confirmation_frames,
+            position_frames=self.position_frames,
         )
         self._inference.start()
 
@@ -497,8 +486,6 @@ class ShoreTrackerRuntime:
             finalized = camera.stop(timeout_seconds=timeout)
         except Exception:
             finalized = False
-        with self._recovery_lock:
-            self._recovery["previous_recording_finalized"] = bool(finalized)
         return finalized or bool(getattr(camera, "resources_released", False))
 
     def _check_camera_once(self) -> None:
@@ -513,16 +500,9 @@ class ShoreTrackerRuntime:
             age = getattr(camera, "progress_age_seconds", None)
             if callable(age):
                 age = age()
-            recording_age = getattr(camera, "recording_progress_age_seconds", None)
-            if callable(recording_age):
-                recording_age = recording_age()
             if (
                 camera is not None and not manual and terminal is None
                 and (age is None or age <= self._camera_stall_seconds)
-                and (
-                    recording_age is None
-                    or recording_age <= self._camera_stall_seconds
-                )
             ):
                 with self._recovery_lock:
                     if self._reconnect_requested.is_set():
@@ -551,9 +531,6 @@ class ShoreTrackerRuntime:
                 with self._recovery_lock:
                     self._recovery["state"] = "blocked"
 
-    def _on_fragment_closed(self, fragment: ClosedFragment) -> None:
-        self.status.update_metrics(last_recording=fragment.path.name)
-        self.status.update_component("recording", "ready", "MKV segment closed")
 
     def _request_servo_arm(self) -> tuple[bool, str]:
         if self._servo is None:
@@ -583,6 +560,11 @@ class ShoreTrackerRuntime:
         if servo is not None:
             servo.set_velocity(pan, tilt, run_id)
 
+    def _pause_servo(self):
+        servo = self._servo
+        if servo is not None:
+            servo.pause_motion()
+
     def _stop_servo(self, reason: str = "") -> None:
         with self._actuator_lock:
             if self._servo_test is not None:
@@ -599,10 +581,9 @@ class ShoreTrackerRuntime:
                 if self._pan_tilt is not None else {"available": False})
 
     def _build_servo_test_service(self):
-        # These are bounds on this explicit test's requested positions, separate
-        # from the narrower automatic-tilt tuning. No persistent config changes.
-        cfg = replace(self.config.servo, enabled=True, angle_min_deg=70., angle_max_deg=110.,
-                      tilt_min_deg=50., tilt_max_deg=130., send_hz=50)
+        low, high = PWM_MANUAL_TILT_LIMITS_DEG
+        cfg = replace(self.config.servo, enabled=True, angle_min_deg=low, angle_max_deg=high,
+                      tilt_min_deg=low, tilt_max_deg=high, send_hz=50)
         return self._servo_service_builder(cfg, self.status)
 
     def _servo_test_snapshot(self):

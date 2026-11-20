@@ -14,6 +14,10 @@
       <section class="preview-column">
         <div class="control-viewer"><div id="controlNoSignal" class="no-picture">等待相機畫面</div><img id="controlStream" src="/api/preview.mjpeg" alt="調整鏡頭時的即時預覽"></div>
         <section class="card tuning-panel" aria-label="追蹤參數">
+        <label class="manual-speed"><span>手動控制速度（°/s）</span><input id="manualSpeed" type="number" min="0.1" max="5" step="0.1" value="5" inputmode="decimal" aria-label="手動控制速度（°/s）" aria-describedby="manualSpeedMessage" disabled></label>
+        <p id="manualSpeedMessage" role="status"></p>
+          <label class="switch-row"><span>AI 辨識</span><span class="ios-switch"><input id="inferenceEnabled" type="checkbox" role="switch" aria-label="AI 辨識" aria-describedby="inferenceToggleMessage" disabled><span class="switch-track" aria-hidden="true"></span></span></label>
+          <p id="inferenceToggleMessage" role="status" hidden></p>
           <label class="switch-row"><span>啟用俯仰</span><span class="ios-switch"><input id="tiltEnabled" type="checkbox" role="switch" aria-label="啟用俯仰" disabled><span class="switch-track" aria-hidden="true"></span></span></label>
           <label title="要求角度，非實際位置回授"><span>目標角度</span><input id="servoAngleSlider" type="range" min="0" max="180" step="0.1" value="90" disabled aria-label="Servo 目標角度（指令值）"><output id="servoTargetAngle">—</output></label>
           <label><span>跟拍容許區</span><input id="deadband" type="range" min="0.05" max="0.4" step="0.005" value="0.20"><output id="deadbandValue">40%</output></label>
@@ -59,6 +63,8 @@
     </details>
     <footer><span id="updated">等待狀態</span><span>Shore Jetson · 控制</span></footer>
   </main>
+  <script src="/inference-toggle.js"></script>
+  <script src="/keyboard-jog.js"></script>
   <script src="/advanced.js"></script>
 </body>
 </html>

@@ -28,7 +28,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
   assert.equal(get('servoTestButton').textContent,'置中\n停止測試');
   assert.equal(get('servoTestButton').disabled,false);
   assert.equal(get('servoTestState').hidden,true);
-  for(const [phase,label] of [['left','左 20°'],['right','右 40°'],['up','抬頭 40°'],['down','低頭 40°']]){
+  for(const [phase,label] of [['left','左 20°'],['right','右 40°'],['up','抬頭 20°'],['down','低頭 20°']]){
     status.phase=phase;status.notice='完整流程說明不應顯示在按鈕下方';await interval();
     assert.equal(get('servoTestButton').textContent,`${label}\n停止測試`);
     assert.equal(get('servoTestState').hidden,true,'only the short action belongs on the progress button');

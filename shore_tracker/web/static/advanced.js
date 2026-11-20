@@ -13,6 +13,8 @@ const display = (id, value) => {
 };
 function render(status, diagnostic) {
   const online = diagnostic.available && !status.offline_preview;
+  window.shoreInferenceControl?.render(status, online);
+  window.shoreKeyboardControl?.render(status, online);
   display('connection', online ? (status.tracking.armed ? '追蹤中' : status.tracking.mode === 'arming' ? '啟動追蹤中' : '待命') : '離線版面預覽');
   if ($('connection')) $('connection').className = online ? 'badge ready' : 'badge';
   $('components')?.replaceChildren(...Object.entries({camera: '相機', inference: '辨識', servo: '舵機串口', recording: '錄影'}).map(([key, name]) => {
@@ -39,7 +41,7 @@ function render(status, diagnostic) {
   $('operatorIssue').hidden = issues.length === 0;
   renderControls(status, online, diagnostic);
   display('targetId', online && status.tracking.armed && status.tracking.target_track_id != null ? `#${status.tracking.target_track_id}` : '—');
-  display('trackingPhase', online ? ({disarmed:'待命',arming:'啟動中',searching:'尋找衝浪者',chasing:'追浪試拍',takeoff:'起乘',surfing:'衝浪中',finished:'本次跟拍結束'}[status.tracking.mode] || '等待狀態') : '尚未連線');
+  display('trackingPhase', online ? ({manual:'方向鍵手動控制',disarmed:'待命',arming:'啟動中',searching:'尋找衝浪者',chasing:'追浪試拍',takeoff:'起乘',surfing:'衝浪中',finished:'本次跟拍結束'}[status.tracking.mode] || '等待狀態') : '尚未連線');
   const metrics = status.metrics;
   display('inferenceFps', online && Number.isFinite(metrics.inference_fps) ? Math.round(metrics.inference_fps) : '—');
   display('frameAge', online && Number.isFinite(metrics.camera_frame_age_ms) ? `${Math.round(metrics.camera_frame_age_ms)} ms` : '—');
@@ -70,6 +72,8 @@ async function refresh() {
     const [status, diagnostic] = await Promise.all(responses.map(response => response.json()));
     render(status, diagnostic);
   } catch (_) {
+    window.shoreInferenceControl?.disconnect();
+    window.shoreKeyboardControl?.disconnect();
     controlsOnline = false;
     controlStreamDirty = true;
     if (!embedded) { $('controlStream').style.visibility = 'hidden'; $('controlNoSignal').hidden = false; }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from shore_tracker.config import ServoConfig
+from shore_tracker.config import PWM_MANUAL_TILT_LIMITS_DEG, ServoConfig
 from shore_tracker.status import StatusStore
 
 from .simple import SimpleServoClient, serial_client
@@ -88,6 +88,12 @@ class ServoService:
         if self.client.protocol == "pelco_d":
             self.status.update_servo_command(protocol="pelco_d", pan=0, tilt=0)
 
+    def pause_motion(self) -> None:
+        if self.client.protocol == 'm0_pulse':
+            self.client.pause_motion()
+        else:
+            self.stop_motion()
+
     def stop_motion(self, _reason: str = "") -> None:
         self.client.stop_motion()
         if self.client.protocol == "pelco_d":
@@ -113,13 +119,18 @@ def build_servo_service(
         raise ValueError("Direct controller requires UART; set servo.transport to serial")
     if config.protocol == "pelco_d":
         return ServoService(pelco_serial_client(config), status)
+    tilt_min, tilt_max = config.tilt_min_deg, config.tilt_max_deg
+    if config.protocol == 'm0_pulse':
+        # One writer accepts both the automatic planner and leased manual tilt.
+        manual_min, manual_max = PWM_MANUAL_TILT_LIMITS_DEG
+        tilt_min, tilt_max = min(tilt_min, manual_min), max(tilt_max, manual_max)
     common = dict(
         angle_min_deg=config.angle_min_deg,
         angle_max_deg=config.angle_max_deg,
         send_hz=config.send_hz,
         protocol=config.protocol,
-        tilt_min_deg=config.tilt_min_deg,
-        tilt_max_deg=config.tilt_max_deg,
+        tilt_min_deg=tilt_min,
+        tilt_max_deg=tilt_max,
         pan_channel=config.pan_channel,
         tilt_channel=config.tilt_channel,
     )

@@ -58,7 +58,7 @@ def test_native_progress_completion_recovery_and_late_cancel():
                 return self.reply(result)
             if action == 'heartbeat':
                 heartbeat.append(body)
-                state.update(notice='抬頭 40°', phase='up')
+                state.update(notice='抬頭 20°', phase='up')
                 if len(starts) == 1 and len(heartbeat) >= 4:
                     state.update(running=False, connected=False, notice='測試指令完成', phase='complete', epoch=1)
             elif action == 'stop':

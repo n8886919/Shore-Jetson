@@ -50,11 +50,13 @@ python3 deploy/install-webrtc.py /path/to/go2rtc_linux_arm64
 WebRTC 媒體使用 18555 TCP／UDP。不開啟 RTSP server，不做路由器轉發或變更相機網路。
 手機／筆電需能連到 Jetson 的管理區網；App 底列在 port 80 只顯示 `IP`，其他埠顯示 `IP:port`。
 
-原生 App 不使用 WebRTC。Web 自動選 H.264/WebRTC；失敗回到 JPEG。
+原生 App 不使用 WebRTC。Web 使用 H.265/WebRTC；失敗回到 JPEG。
 開啟網頁不 ARM、不發相機或舵機控制。只有 viewer 接上本機 MPEG-TS source 時
-才建立 H.264 encoder；斷線會釋放該 encoder。原有 JPEG 生產仍保留，供回退與既有 API。
+才建立 H.265 encoder；斷線會釋放該 encoder。原有 JPEG 生產仍保留，供回退與既有 API。
 
-## Nano 編碼實測
+`web.h264_preview` 是沿用的設定鍵。網頁協商 H.265，缺少 H.265 或連線失敗時顯示 JPEG。
+
+## Nano 先前 H.264 與 JPEG 編碼實測
 
 2026-11-14，在同一台 Nano／L4T 32.7.6 的實際相機預覽，960×540、約 10 FPS，
 各取 15 秒，讀同一條原生 RAM 畫面支線。測試不保存影像、不啟動馬達。
