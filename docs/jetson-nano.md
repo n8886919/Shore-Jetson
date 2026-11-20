@@ -18,11 +18,13 @@ GStreamer 1.14 使用同步 splitmuxsink 與 Matroska muxer 物件，不要求�
 右上角縮小／關閉按鈕與齒輪同為 50×50；縮小會把瀏覽器視窗變成 512×300，
 露出 Jetson 桌面，再按還原回全螢幕。關閉前確認，dock 的 Shore Jetson 圖示可重開；原 1280×800 版面仍保留。
 
-使用者於 **2026-11-14** 再次確認：RS485 雲台已收起，現行換回 **CH340G USB-TTL
-→ M0／M1 控制板 → 兩顆 180° PWM servo**。既有 `m0_pulse` 路徑使用 9600 8N1
-與 ASCII 脈寬命令；現行設定落差及 STOP 語意見[控制契約](servo-controller.md)。
-`config/jetson-nano.toml` 仍選停用的 `pelco_d`／Moxa，具名 M0 profile 也含舊裝置與參數；
-兩者都不是已核實的現行 CH340G 設定，本次只更新文件。
+使用者於 **2026-11-19** 確認改用 **40-pin 原生 3.3 V UART → M0／M1 控制板
+→ 兩顆 180° PWM servo**，取代先前 CH340G USB-TTL。`m0_pulse` 維持 9600 8N1
+與 ASCII 脈寬命令；實機僅切換 `servo.serial_device`，保留通道、方向、速度與限制。
+需核對 `/dev/ttyTHS1` 非 console、停用占用該埠的 `nvgetty`，並以 udev 維持
+`root:dialout 0660`；不要修改另一組 `ttyS0` 除錯 console。
+現行設定與 STOP 語意見[控制契約](servo-controller.md)。一般 Pelco-D/Moxa 範例與
+具名 M0 profile 的舊運動參數都不能直接當作本次實機設定。
 
 2026-11-06 RS485 階段曾補裝匹配 `4.9.337-tegra` 的 `ti_usb_3410_5052` 模組，
 使用 Moxa R+／R−、9600 8N1、地址 001、獨立 12 V。手動轉動與 42 組零 RX 查詢
@@ -50,7 +52,7 @@ GStreamer 1.14 使用同步 splitmuxsink 與 Matroska muxer 物件，不要求�
 `app` 可指向 `releases/` 下的部署目錄；腳本應使用 Python 絕對路徑，
 避免以 symlink 工作目錄下的 `../venv` 定位直譯器。設定檔中的 `~` 會先展開。
 相機 URI 僅放在 `~/.config/shore-tracker/secrets.env`，權限 0600；
-不要放入指令列、報告或 Git。在核對現行 CH340G 設定、相機方向、中立與機械限制前，
+不要放入指令列、報告或 Git。在核對當次 UART 設定、相機方向、中立與機械限制前，
 待部署設定維持 `servo.enabled=false`；不直接套用一般 Pelco-D 範例或舊 M0 profile。
 
 `deploy/install-nano-network.sh` 為已核准的專用 eth0 安裝流程：保留 Wi-Fi
@@ -66,6 +68,14 @@ GStreamer 1.14 使用同步 splitmuxsink 與 Matroska muxer 物件，不要求�
 後端以 `sudo systemctl` 管理，WebRTC relay 仍用 `systemctl --user`；
 權限與入口見[Web port 80](project-setup.md#web-port-80)。kiosk 由桌面 autostart 啟動。
 安裝與當次啟動可驗證；完整斷電／重新開機仍須另行驗收。
+
+### Camera SD recording
+
+選用相機卡模式後，開始與停止按鈕控制相機自己的定時錄影排程。Nano 僅從 RTSP 取得預覽與辨識影像。開啟頁面、啟用追蹤或辨識到衝浪者均不會開始錄影。原有 Nano 影片仍可在掛載原磁碟後透過檔案頁讀取。
+
+1. 在 Nano 的相機專用網路核實管理帳密可透過安佳 CGI `getuid` 取得工作階段，測試時以隱藏輸入取得密碼，僅在記憶體處理。相機拒絕的帳密請先向機主或賣家核對。取得可用帳密後，由機主在服務既有的 `EnvironmentFile` 加入兩個變數 `SHORE_CAMERA_ADMIN_USER` 與 `SHORE_CAMERA_ADMIN_PASSWORD`。Nano 安裝使用 `~/.config/shore-tracker/secrets.env`，由服務帳號擁有、權限 `0600`。保留原 RTSP 設定，避免將帳密寫入命令歷史、TOML、報告或 Git。
+2. 部署含相機卡控制的後端與網頁，在生效 TOML 的既有 `[recording]` 區段加入 `destination = "camera_sd"`。使用安裝時選定的 systemd 層級重新啟動服務，再查 `/api/diagnostics` 的 `recording.destination`。省略此欄或設成 `"jetson"` 會使用本機錄影。曾將影片遷到 Nano SD 的安裝，其 `50-video-storage.conf` 另以掛載相依性與 `mountpoint` 限制服務啟動。需要拔除 Nano SD 也能運作時，另行調整這個 drop-in 並驗收無卡啟動。
+3. 先按「查詢相機卡」。相機須回報本機儲存已開、遠端儲存已關，才能操作排程。記下測試前狀態與當日最後片段，再用「開始相機卡錄影」和「停止相機卡錄影」核對排程的獨立讀回。等待片段結束後再查一次，用相機本地時間與非零大小辨認新增片段。在相機回放中確認這段影像能播放，並將排程還原至機主指定的狀態。排程回讀只證明設定生效，容量、掛載與寫入故障原因仍需從相機查證。
 
 10/30 先前限速 2 Hz 的整機短測（kiosk、辨識、預覽與背景錄影同時運作，35 次每秒觀察）：
 辨識平均 1.93 Hz、觀察值 1.79～2.04 Hz，預覽平均 10.09 fps；各元件全程 ready、
@@ -244,6 +254,8 @@ detector cls／box／centerness 最大絕對誤差分別為 0.03623／0.07492／
 
 `deploy/clean-nano-system.py` 預設只顯示移除計畫；在已授權清理的 Nano 上，
 使用 `sudo python3 clean-nano-system.py --apply` 才會刪除。
+報告儲存於呼叫 sudo 的使用者家目錄；直接以 root 執行時，需以 `--user USER`
+明確指定非 root 的報告擁有者，不使用寫死的個人目錄。
 工具以明確套件清單和已審查的連帶移除清單作限制，不執行 blanket autoremove。
 GPU 執行庫、Wi-Fi、SSH、桌面及系統設定工具保留。
 開發用 headers／static libraries 與執行庫分開處理；移除前者後仍須驗證引擎

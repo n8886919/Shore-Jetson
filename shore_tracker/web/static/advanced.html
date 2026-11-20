@@ -33,7 +33,13 @@
           <p class="lens-caption">光學變焦</p><div class="lens-buttons" role="group" aria-label="光學變焦"><button data-camera-action="zoom_out" disabled>− 縮小</button><button data-camera-action="zoom_in" disabled>＋ 放大</button></div>
           <p id="cameraMessage" class="note" role="status">讀取鏡頭狀態</p>
         </section>
-        <section class="card recording-card tuning-panel"><label class="switch-row recording-mode"><span>連續錄影</span><span class="ios-switch"><input id="continuousRecording" type="checkbox" role="switch" aria-label="連續錄影" disabled><span class="switch-track" aria-hidden="true"></span></span></label><p id="recordStatus" class="note" role="status"></p></section>
+        <section class="card recording-card tuning-panel"><label id="nanoRecordingMode" class="switch-row recording-mode"><span>連續錄影</span><span class="ios-switch"><input id="continuousRecording" type="checkbox" role="switch" aria-label="連續錄影" disabled><span class="switch-track" aria-hidden="true"></span></span></label>
+        <div id="cameraCardControls" hidden>
+          <button id="cameraCardAction" type="button" class="reconnect-button" disabled>開始相機卡錄影</button>
+          <button id="cameraCardRefresh" type="button" class="reconnect-button" disabled>查詢相機卡</button>
+          <p id="cameraCardStatus" class="note" role="status"></p>
+          <p id="cameraCardClip" class="note" hidden></p>
+        </div><p id="recordStatus" class="note" role="status"></p></section>
       </div>
     </div>
     <details class="diagnostics"><summary>連線與診斷 <span>相機、追蹤、自動恢復</span></summary>
@@ -63,6 +69,7 @@
     </details>
     <footer><span id="updated">等待狀態</span><span>Shore Jetson · 控制</span></footer>
   </main>
+  <script src="/camera-card.js"></script>
   <script src="/inference-toggle.js"></script>
   <script src="/keyboard-jog.js"></script>
   <script src="/advanced.js"></script>

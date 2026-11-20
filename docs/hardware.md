@@ -1,16 +1,20 @@
 # PWM servo 與 Jetson 硬體
 
-使用者於 **2026-11-14** 再次確認已收起 RS485 雲台，換回以下路徑：
+使用者於 **2026-11-19** 確認改接 Nano 的 **40-pin 原生 3.3 V UART**，
+取代先前的 CH340G USB-TTL；RS485 雲台仍已收起。
 
 ```text
-Jetson USB → CH340G USB-TTL → M0／M1 雙通道控制板 → 兩顆 180° PWM servo
+Nano Pin 8 TX → M0／M1 控制板 RX → 兩顆 180° PWM servo
+Nano GND → 控制板 GND
 符合目前控制板與馬達額定值的獨立電源 → 控制板／servo
 ```
 
-這是已確認的硬體選擇，未證明目前每條線、通道、方向、供電電壓或機械限制。
-換線先斷電；USB-TTL 的訊號電位、TX→控制板 RX、共地及電源隔離需按當前設備核對。
-不要把馬達電源接入 USB-TTL／Jetson 邏輯電源，也不沿用 RS485 的 A／B 或 12 V 接法。
-CH340G 裝置身分應重新核對，優先 `/dev/serial/by-id/`，不依 `ttyUSB` 編號猜值。
+Pin 10 為 Nano RX；若接控制板 TX，回傳電位必須相容 3.3 V。
+換線先斷電，不把馬達電源接到 Jetson 邏輯電源，不沿用 RS485 A／B 或 12 V 接法。
+40-pin UART 通常為 `/dev/ttyTHS1`，實機需核對 console／getty 與串口持有者；
+裝置節點需讓執行帳號透過 `dialout` 讀寫。獨立的 `ttyS0` 除錯 console 保留。
+CH340G 改作備用時，重新核對 USB 身分並使用 `/dev/serial/by-id/`，不猜 `ttyUSB` 編號。
+本次接線確認與串口就緒不代表舵機已收到命令、通道／方向正確或完成機械驗收。
 
 程式 `m0_pulse` 使用 9600 8N1、ASCII `#00Pxxxx!`／`#01Pxxxx!`；控制板產生 PWM。
 0–180°／500–2500 µs 是命令映射，不是當前機構的可用行程或位置回授。

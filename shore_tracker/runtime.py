@@ -55,8 +55,6 @@ def validate_direct_camera_route(rtsp_uri: RtspUri, interface: str) -> None:
         raise RuntimeError("camera route is not confined to its dedicated interface")
 
 
-
-
 class ShoreTrackerRuntime:
     """Preview, requested event recording, TensorRT, servos, and kiosk UI."""
 
@@ -133,18 +131,24 @@ class ShoreTrackerRuntime:
             command_velocity=self._command_velocity,
             pause_output=self._pause_servo,
         )
-        clip_recorder = ManualRecording(
-            config.data_dir / "manual-recordings", self._recording_uri,
-            config.camera.codec, config.camera.rotation_degrees,
-            config.recording.free_stop_gib,
-        )
-        self.manual_recording = RecordingTriggers(
-            clip_recorder,
-            armed_reader=lambda: self.status.snapshot()["tracking"]["armed"],
-            stale_seconds=config.tracking.frame_stale_seconds,
-            settings_path=config.data_dir / 'recording-settings.json',
-        )
-        self.status.update_component("recording", "ready", "等待錄影觸發")
+        if config.recording.destination == "camera_sd":
+            from shore_tracker.camera.card_recording import CameraCardRecording
+
+            self.manual_recording = CameraCardRecording(self._camera_control_host)
+            self.status.update_component("recording", "unknown", "相機卡錄影狀態待讀取")
+        else:
+            clip_recorder = ManualRecording(
+                config.data_dir / "manual-recordings", self._recording_uri,
+                config.camera.codec, config.camera.rotation_degrees,
+                config.recording.free_stop_gib,
+            )
+            self.manual_recording = RecordingTriggers(
+                clip_recorder,
+                armed_reader=lambda: self.status.snapshot()["tracking"]["armed"],
+                stale_seconds=config.tracking.frame_stale_seconds,
+                settings_path=config.data_dir / 'recording-settings.json',
+            )
+            self.status.update_component("recording", "ready", "等待錄影觸發")
         self.controller = AppController(
             self.status,
             arm_callback=self._request_servo_arm,
@@ -203,10 +207,12 @@ class ShoreTrackerRuntime:
         with self._lifecycle_lock:
             if self._started:
                 return
-            self.config.data_dir.mkdir(parents=True, exist_ok=True)
-            self.config.recording.root.mkdir(parents=True, exist_ok=True)
+            if self.config.recording.destination == "jetson":
+                self.config.data_dir.mkdir(parents=True, exist_ok=True)
+                self.config.recording.root.mkdir(parents=True, exist_ok=True)
             self.manual_recording.recover()
-            self._start_storage()
+            if self.config.recording.destination == "jetson":
+                self._start_storage()
             self._start_servo()
             if self.native_frames is not None:
                 self.native_frames.start()
@@ -454,6 +460,7 @@ class ShoreTrackerRuntime:
         return {
             "available": True,
             "recovery": {"automatic": True, **recovery},
+            "recording": {"destination": self.config.recording.destination},
             "video": {"codec": self.config.camera.codec,
                       "rotation_degrees": self.config.camera.rotation_degrees,
                       "preview_fps": self.config.camera.preview_fps},
@@ -469,7 +476,7 @@ class ShoreTrackerRuntime:
     def _request_camera_reconnect(self) -> tuple[bool, str]:
         if not self._started or self._supervisor_stop.is_set():
             return False, "服務尚未就緒"
-        if self.status.snapshot()["metrics"].get("disk_pressure") == "stop":
+        if self._local_storage_stopped():
             return False, "儲存空間不足，請先處理磁碟"
         with self._recovery_lock:
             if self._recovery["state"] in {"queued", "reconnecting"}:
@@ -488,10 +495,14 @@ class ShoreTrackerRuntime:
             finalized = False
         return finalized or bool(getattr(camera, "resources_released", False))
 
+    def _local_storage_stopped(self) -> bool:
+        return (self.config.recording.destination == "jetson"
+                and self.status.snapshot()["metrics"].get("disk_pressure") == "stop")
+
     def _check_camera_once(self) -> None:
         if self._supervisor_stop.is_set():
             return
-        if self.status.snapshot()["metrics"].get("disk_pressure") == "stop":
+        if self._local_storage_stopped():
             return
         with self._camera_lock:
             camera = self._camera
@@ -530,7 +541,6 @@ class ShoreTrackerRuntime:
             else:
                 with self._recovery_lock:
                     self._recovery["state"] = "blocked"
-
 
     def _request_servo_arm(self) -> tuple[bool, str]:
         if self._servo is None:

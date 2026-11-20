@@ -207,11 +207,24 @@ class AppController:
                 return False, "相機操作未完成，請確認連線與鏡頭狀態"
             return True, "已送出調整並停止鏡頭" if action in {"zoom_in", "zoom_out", "focus_near", "focus_far"} else "已完成"
 
+    @property
+    def camera_card_recording(self):
+        return getattr(self.recording, "destination", None) == "camera_sd"
+
     def recording_command(self, action):
+        if self.camera_card_recording:
+            # The camera serializes its card operations. Keep network I/O
+            # independent of the tracking/servo STOP lock and Nano's RTSP state.
+            try:
+                return self.recording.command(action)
+            except (OSError, ValueError, RuntimeError):
+                return False, "相機卡錄影狀態未確認"
         with self._control_lock:
             return self._recording_command(action)
 
     def set_recording_mode(self, continuous):
+        if self.camera_card_recording:
+            return False, "相機卡錄影由網頁手動控制"
         with self._control_lock:
             if self.recording is None:
                 return False, '錄影尚未就緒'

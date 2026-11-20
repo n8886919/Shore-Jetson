@@ -13,28 +13,35 @@ const display = (id, value) => {
 };
 function render(status, diagnostic) {
   const online = diagnostic.available && !status.offline_preview;
+  const card = status.manual_recording?.destination === 'camera_sd';
+  if (!embedded) window.shoreCameraCard?.render(status);
   window.shoreInferenceControl?.render(status, online);
   window.shoreKeyboardControl?.render(status, online);
   display('connection', online ? (status.tracking.armed ? '追蹤中' : status.tracking.mode === 'arming' ? '啟動追蹤中' : '待命') : '離線版面預覽');
   if ($('connection')) $('connection').className = online ? 'badge ready' : 'badge';
   $('components')?.replaceChildren(...Object.entries({camera: '相機', inference: '辨識', servo: '舵機串口', recording: '錄影'}).map(([key, name]) => {
     const item = document.createElement('span');
-    const state = status.components[key]?.state || 'offline';
+    const state = key === 'recording' && card ? (status.manual_recording.available ? 'ready' : 'unknown')
+      : status.components[key]?.state || 'offline';
     item.className = `component ${state === 'ready' || state === 'idle' ? 'ready' : ''}`;
-    item.textContent = `${name} ${stateNames[state] || state}`;
-    item.title = status.components[key]?.detail || '';
+    item.textContent = `${key === 'recording' && card ? '相機卡排程' : name} ${state === 'unknown' ? '待確認' : stateNames[state] || state}`;
+    item.title = (key === 'recording' && card ? status.manual_recording.detail : status.components[key]?.detail) || '';
     return item;
   }));
   const issues = [];
   if (online) {
     const messages = {camera:'影像尚未就緒：請檢查相機電源與網路，系統會自動重連。',inference:'辨識尚未就緒：請稍候；若持續異常，請查看下方連線與診斷。',servo:'舵機連線異常：請檢查控制板電源與接線。',recording:'錄影尚未就緒：目前不保證畫面已錄下，請查看下方連線與診斷。'};
     for (const [key, message] of Object.entries(messages)) {
+      if (key === 'recording' && card) {
+        if (!status.manual_recording.available) issues.push('相機卡排程待確認');
+        continue;
+      }
       if (status.components[key]?.state !== 'ready' && !(key === 'inference' && status.components[key]?.state === 'idle') && !(key === 'servo' && status.components[key]?.state === 'manual')) {
         issues.push({camera:'影像中斷',inference:'辨識未就緒',servo:'舵機未連線',recording:'錄影未就緒'}[key]);
       }
     }
-    if (status.metrics.disk_pressure === 'stop') issues.push('儲存空間不足');
-    else if (status.metrics.disk_pressure === 'warning') issues.push('儲存空間偏低');
+    if (!card && status.metrics.disk_pressure === 'stop') issues.push('儲存空間不足');
+    else if (!card && status.metrics.disk_pressure === 'warning') issues.push('儲存空間偏低');
     if (status.manual_recording?.state === 'failed') issues.push('錄影失敗');
   }
   display('operatorIssue', issues.join('\n'));
@@ -72,6 +79,7 @@ async function refresh() {
     const [status, diagnostic] = await Promise.all(responses.map(response => response.json()));
     render(status, diagnostic);
   } catch (_) {
+    if (!embedded) window.shoreCameraCard?.disconnect();
     window.shoreInferenceControl?.disconnect();
     window.shoreKeyboardControl?.disconnect();
     controlsOnline = false;
@@ -116,7 +124,7 @@ function renderControls(status, online, diagnostic) {
   const recording = status.manual_recording || {};
   recordState = recording.state || 'unavailable';
   appliedContinuous = recording.continuous_enabled === true;
-  recordingModeAvailable = typeof recording.continuous_enabled === 'boolean';
+  recordingModeAvailable = recording.destination !== 'camera_sd' && typeof recording.continuous_enabled === 'boolean';
   if (!recordPending) $('continuousRecording').checked = appliedContinuous;
   if ($('recordStatus')) display('recordStatus',recordState === 'recording'
     ? recording.continuous_requested ? '連續錄影中' : '自動跟拍錄影中'

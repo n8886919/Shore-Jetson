@@ -196,7 +196,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return payload if isinstance(payload, dict) else None
 
     def _static(self, name: str) -> None:
-        if name not in {"index.html", "mobile.html", "app.css", "app.js", "kiosk.css", "kiosk.js", "streaming.js", "advanced.html", "advanced.css", "advanced.js", "pan-tilt.js", "servo-test.js", "files.html", "files.css", "files.js", "inference-toggle.js", "keyboard-jog.js"}:
+        if name not in {"index.html", "mobile.html", "app.css", "app.js", "kiosk.css", "kiosk.js", "streaming.js", "advanced.html", "advanced.css", "advanced.js", "pan-tilt.js", "servo-test.js", "files.html", "files.css", "files.js", "inference-toggle.js", "camera-card.js", "keyboard-jog.js"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         body = files("shore_tracker.web.static").joinpath(name).read_bytes()
@@ -233,7 +233,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", "0")
             self.end_headers()
-        elif path in {"/advanced.css", "/advanced.js", "/kiosk.css", "/kiosk.js", "/streaming.js", "/pan-tilt.js", "/servo-test.js", "/inference-toggle.js", "/keyboard-jog.js"}:
+        elif path in {"/advanced.css", "/advanced.js", "/kiosk.css", "/kiosk.js", "/streaming.js", "/pan-tilt.js", "/servo-test.js", "/inference-toggle.js", "/camera-card.js", "/keyboard-jog.js"}:
             self._static(path[1:])
         elif path == "/api/stream":
             encoder = getattr(self.server, "webrtc_preview", None)
@@ -285,6 +285,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif path == "/api/display-frame":
             self._display_frame()
         elif path == "/api/recordings":
+            if self.server.controller.camera_card_recording:
+                self._json(HTTPStatus.CONFLICT, {"ok": False, "detail": "此介面僅列出 Nano 本機影片"})
+                return
             recorder = self.server.controller.recording
             self._json(HTTPStatus.OK, {'recordings': recorder.recordings() if recorder else []})
         elif re.fullmatch(r'/api/recordings/[0-9a-f]{32}/file', path):
@@ -562,7 +565,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ok, detail = self.server.controller.set_recording_mode(payload['continuous'])
                 self._json(HTTPStatus.OK if ok else HTTPStatus.CONFLICT, {'ok': ok, 'detail': detail})
             elif path == '/api/recording':
-                if payload is None or set(payload) != {'action'} or not isinstance(payload['action'], str) or payload['action'] not in {'start', 'stop'}:
+                actions = {'start', 'stop'}
+                if self.server.controller.camera_card_recording:
+                    actions.add('refresh')
+                if payload is None or set(payload) != {'action'} or not isinstance(payload['action'], str) or payload['action'] not in actions:
                     self._json(HTTPStatus.BAD_REQUEST, {'ok': False})
                     return
                 ok, detail = self.server.controller.recording_command(payload['action'])

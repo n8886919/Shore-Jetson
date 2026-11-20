@@ -27,7 +27,6 @@ def run_doctor(config: AppConfig) -> dict[str, Any]:
             control_port = False
     checks = {
         "camera_interface": (Path("/sys/class/net") / config.camera.interface).exists(),
-        "recording_directory": _writable_parent(config.recording.root),
         "gstreamer": shutil.which("gst-launch-1.0") is not None,
         "rtsp_secret": config.secret_present(config.camera.rtsp_uri_env),
         "inference_runtime": tensorrt,
@@ -45,6 +44,8 @@ def run_doctor(config: AppConfig) -> dict[str, Any]:
             )
         ),
     }
+    if config.recording.destination == "jetson":
+        checks["recording_directory"] = _writable_parent(config.recording.root)
     return {
         "ok": all(checks.values()),
         "scope": "poc_startup_checks",

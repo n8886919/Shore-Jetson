@@ -1,13 +1,14 @@
 # PWM servo 接線與驗收
 
-現行硬體為 **CH340G USB-TTL → M0／M1 控制板 → 兩顆 180° PWM servo**，
-使用者於 2026-11-14 再次確認 RS485 雲台已收起。先讀[控制契約](servo-controller.md)
+現行硬體為 **Nano 40-pin 3.3 V UART → M0／M1 控制板 → 兩顆 180° PWM servo**，
+使用者於 2026-11-19 確認接線；先前 CH340G 已拔除，RS485 雲台仍已收起。先讀[控制契約](servo-controller.md)
 與[硬體](hardware.md)。本頁是另行獲准實機工作時的核對入口，不代表本次已部署或驗收。
 
 1. 核對當次 Jetson、實際設定路徑與軟體版本，保持 DISARMED；
    串口只允許一個持有者。先協調正在進行的測試，不搶占串口或自行停啟服務。
 2. 換線前斷電，核對目前 servo／控制板的額定供電、邏輯電位、TX→RX 與共地。
-   確認 CH340G 身分與固定裝置路徑；不沿用 Moxa、RS485 A／B 或 12 V 接法。
+   確認 `/dev/ttyTHS1` 非 console、無 getty 占用且執行帳號可讀寫；
+   使用備用 CH340G 時另確認其身分與固定裝置路徑；不沿用 Moxa、RS485 A／B 或 12 V 接法。
 3. 核對 `protocol="m0_pulse"`、9600 8N1、兩個不同的 0／1 通道。
    一般 TOML 範例仍選 Pelco-D；`jetson-m0-uart.toml` 仍有舊 `/dev/ttyTHS1`、
    已啟用輸出與運動參數，兩者都不是已核實的現行設定，不可原樣部署。

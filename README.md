@@ -15,14 +15,14 @@ configuration still require physical verification; dated tests do not establish 
 of the reassembled setup. General TOML examples still select disabled Pelco-D/Moxa,
 and the named M0 profile also contains old, unverified settings. This documentation
 does not make either ready for deployment. The source defaults now use horizontal
-M0 and vertical M1; the installed device settings still need a separate update.
+M0 and vertical M1; verify the installed device settings separately.
 See the [current control contract](docs/servo-controller.md)
 and [hardware](docs/hardware.md).
 
 The owner now specifies horizontal **M0** and vertical **M1**. The settings drawer's
-**雲台測試** button requests both axes at 90°, then relative left 5°, right 10°,
-up 10° and down 10°, with live step text and a stop button. It ends at centre-right
-5° and vertical centre. Test and tracking writers are exclusive; dismissal,
+**雲台測試** button requests both axes at 90°, then relative left 20°, right 40°,
+up 40° and down 40°, with live step text and a stop button. It ends at centre-right
+20° and vertical centre. Test and tracking writers are exclusive; dismissal,
 connection loss and a heartbeat timeout cancel the test. Completion is a command
 result, not measured position. See [the PWM test contract](docs/servo-controller.md#pwm-雲台測試按鈕).
 
@@ -151,15 +151,14 @@ Tracking changes from 開始追蹤 to 取消啟動 or 停止追蹤 according to 
 Status loss permits STOP but never a new ARM request. Lens adjustments require
 tracking to be stopped. PWM angle values are requested values, not measured position.
 
-The control page retains read-only `/api/diagnostics` and queued camera recovery.
-The backup button is labelled **重新連接相機**. Its progress follows live recovery
-state and disappears when video is ready; no page refresh is needed. Servo faults
+The control page retains read-only `/api/diagnostics` and automatic camera recovery.
+Native and Web interfaces have no manual camera reconnect button. Recovery
+status updates automatically and clears when video is ready. Servo faults
 are labelled **舵機未連線**. With the owner's current dual 180° PWM servos
 (`m0_pulse`, CH340G USB-TTL → M0/M1), the supervisor automatically retries a
 missing or failed UART after closing its previous owner. Recovery stays DISARMED,
 discards old targets and requires a fresh manual ARM; it does not restart video.
-Manual reconnection is rejected while tracking or event recording is active,
-queued or finalizing. Recovery remains DISARMED. Incomplete fragments are
+Recovery remains DISARMED. Incomplete fragments are
 retained without claiming successful finalization. Unknown resource ownership
 blocks replacement. No camera passwords or stream URLs are exposed.
 
@@ -218,3 +217,5 @@ foreground preview with Ctrl+C.
 The kiosk preview uses the same 960x540 image area. Lens,
 tuning and recording controls open via the gear button. Offline preview rejects
 all hardware commands and does not invent live metrics.
+
+區網 Web 的 `/files` 可瀏覽 Nano 記憶卡、下載影片及使用瀏覽器預覽；MKV／H.265 播放依瀏覽器支援，詳見[檔案瀏覽說明](docs/ui.md#記憶卡檔案瀏覽2026-11-19)。

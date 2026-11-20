@@ -266,7 +266,9 @@ class Desktop : public QWidget {
         arm->setEnabled(!offline && !pending && (!known || active || state["arm_allowed"].toBool()));
         arm->setStyleSheet(QString(active || (!known && !offline) ? "background:#712b35;color:white;font-size:%1px" : "background:#29d6bd;color:#05211e;font-size:%1px").arg(qMax(12,int(22*qMin(width()/1024.0,height()/600.0)))));
         tilt->setEnabled(!offline && known && !pending && state["tuning"].toObject()["tilt_available"].toBool());
-        continuous->setEnabled(!offline && known && !pending);
+        const bool cameraCard=state["manual_recording"].toObject()["destination"].toString()=="camera_sd";
+        continuous->setVisible(!cameraCard);
+        continuous->setEnabled(!cameraCard && !offline && known && !pending);
         const auto disk=state["metrics"].toObject();
         const auto used=disk["used_gib"], free=disk["free_gib"];
         recordingCapacity->setVisible(state["manual_recording"].toObject()["destination"].toString()!="camera_sd");
@@ -443,7 +445,12 @@ protected:
         p.resetTransform();p.scale(s,s);p.setClipping(false);
         p.fillRect(QRectF(0,544,1024,56),QColor("#0a171d"));p.setFont(QFont("Noto Sans CJK TC",12));p.setPen(QColor("#ecf7f5"));
         auto metrics=state["metrics"].toObject(),rec=state["manual_recording"].toObject();
-        QString text=offline?"離線預覽":!fresh()?"服務連線中斷":QString("%1 FPS    %2").arg(qRound(metrics["preview_fps"].toDouble())).arg(rec["state"].toString()=="recording"?"錄影中":"未錄影");
+        QString recordingLabel=rec["state"].toString()=="recording"?"錄影中":"未錄影";
+        if (rec["destination"].toString()=="camera_sd") {
+            const auto scheduled=rec["schedule_enabled"];
+            recordingLabel=!scheduled.isBool()?"相機卡排程未知":scheduled.toBool()?"相機卡排程已開":"相機卡排程已關";
+        }
+        QString text=offline?"離線預覽":!fresh()?"服務連線中斷":QString("%1 FPS    %2").arg(qRound(metrics["preview_fps"].toDouble())).arg(recordingLabel);
         if(armed()&&fresh() && state["keyboard"].toObject()["enabled"].toBool())text += "    方向鍵長按移動，放開停止";
         else if(armed()&&fresh())text += state["tracking"].toObject()["mode"].toString()=="searching"?"    尋找中":rec["tracking_qualified"].toBool()?"    起乘／衝浪":"    偵測到追浪";
         if(fresh() && !offline){auto servo=state["components"].toObject()["servo"].toObject()["state"].toString();

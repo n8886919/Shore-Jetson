@@ -368,3 +368,55 @@ def test_continuous_recording_mode_api_is_strict_and_never_arms_or_records():
         assert post({'continuous':False})==200 and not recording.snapshot()['continuous_enabled']
         assert not status.snapshot()['tracking']['armed']
     finally:server.shutdown();thread.join();server.server_close()
+
+
+def test_camera_card_recording_api_is_independent_of_tracking_and_nano_stream():
+    from http.client import HTTPConnection
+    import json
+    from threading import Thread
+
+    from shore_tracker.preview import PreviewStore
+    from shore_tracker.web.server import make_server
+
+    class CameraCard:
+        destination = 'camera_sd'
+
+        def __init__(self):
+            self.actions = []
+
+        def command(self, action):
+            self.actions.append(action)
+            return True, '已讀回'
+
+    status = StatusStore()
+    card = CameraCard()
+    server = make_server(('127.0.0.1', 0), status, AppController(status, recording=card), PreviewStore())
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+
+    def request(method, path, payload=None, origin=None):
+        headers = {'Content-Type': 'application/json'}
+        if origin:
+            headers['Origin'] = origin
+        connection.request(method, path, json.dumps(payload) if payload else None, headers)
+        response = connection.getresponse()
+        response.read()
+        return response.status
+
+    try:
+        assert request('GET', '/camera-card.js') == 200
+        assert request('GET', '/api/recordings') == 409
+        assert request('POST', '/api/recording', {'action': 'start'}, 'https://other.invalid') == 403
+        assert request('POST', '/api/recording', {'action': 'format'}) == 400
+        assert request('POST', '/api/recording/mode', {'continuous': True}) == 409
+        for action in ('refresh', 'start', 'stop'):
+            assert request('POST', '/api/recording', {'action': action}) == 200
+        assert card.actions == ['refresh', 'start', 'stop']
+        assert not status.snapshot()['tracking']['armed']
+        assert status.snapshot()['inference'] == {'enabled': False, 'locked': False}
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join()

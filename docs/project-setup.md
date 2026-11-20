@@ -47,6 +47,23 @@ is incomplete for that test; report the skip rather than claiming a full pass.
 
 ## Local configuration
 
+### Nano recording card
+
+Nano local recording uses the ext4 card mounted at `/mnt/shore-video`.
+The preview does not write background recordings; footage is created only by
+manual, automatic-following or ARM-session continuous recording triggers.
+Its `data/recordings` and `data/manual-recordings` paths point to directories
+on that mount. Keep the systemd mount guard in place. Use the capacity shown
+in Web settings or the native App to check used and available GiB.
+
+### Camera SD recording
+
+Set `destination = "camera_sd"` in the active TOML's existing `[recording]`
+section to control the camera's own recording schedule from Shore Jetson Web.
+Omitting the setting selects the existing `jetson` recording mode. The camera
+control account is supplied separately from the RTSP URI. See the
+[Nano setup and recording acceptance steps](jetson-nano.md#camera-sd-recording).
+
 ### Web port 80
 
 The runtime and supplied profiles default to HTTP port **80**. On an authorized
@@ -143,12 +160,6 @@ Raw media, model artifacts, build output and publication backups are excluded by
 `.gitignore`. Review both file contents and the intended diff before any separately
 authorized publication; an ignore rule does not remove already tracked content.
 
-### Requested local recording
-
-The preview pipeline does not write background video segments. Local clips start
-only through manual, automatic-following or ARM-session continuous triggers.
-Existing recordings remain on the video card.
-
 
 ### Tailscale Web access
 
@@ -156,3 +167,7 @@ With `[web] allow_lan = true`, the dashboard also accepts clients in Tailscale's
 `100.64.0.0/10` IPv4 range. Connect using the Nano's numeric Tailscale address.
 The tailnet policy must grant the requesting device TCP 80 access to the Nano.
 Host validation and same-origin control checks apply to these connections.
+On installations using `/usr/local/sbin/shore-tailnet-guard`, also add the approved
+device addresses to its TCP 80 input and established reply rules. The installed
+`tailscaled` service loads that script before starting, so its saved rules must
+match the intended tailnet Web access.

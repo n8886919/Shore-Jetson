@@ -53,6 +53,7 @@ class RecordingConfig:
     free_warning_gib: int = 120
     free_stop_gib: int = 100
     record_audio: bool = False
+    destination: str = "jetson"
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,7 @@ def load_config(path: str | Path) -> AppConfig:
         "confirmation_frames": (_int, 3),
     }, "inference")
     recording = _make(_table(raw, "recording"), RecordingConfig, {
+        "destination": (_string, RecordingConfig.destination),
         "root": (_path, str(RecordingConfig.root)),
         "segment_seconds": (_int, 600),
         "free_warning_gib": (_int, 120),
@@ -330,6 +332,8 @@ def validate_config(cfg: AppConfig) -> None:
             or not math.isfinite(cfg.inference.max_fps)
             or not (cfg.inference.max_fps == 0 or 1 <= cfg.inference.max_fps <= 10)):
         raise ConfigError("inference.max_fps must be 0 (unlimited) or in [1, 10]")
+    if cfg.recording.destination not in {"jetson", "camera_sd"}:
+        raise ConfigError("recording.destination must be jetson or camera_sd")
     if cfg.recording.segment_seconds != 600 or cfg.recording.record_audio:
         raise ConfigError("recording must be 600-second MKV without audio")
     if cfg.recording.free_stop_gib <= 0 or cfg.recording.free_stop_gib >= cfg.recording.free_warning_gib:

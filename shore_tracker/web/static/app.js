@@ -18,7 +18,7 @@ let cameraPending = 0;
 let cameraState = null;
 let recordingState = "unavailable";
 let recordingPending = false;
-let continuousRecordingEnabled = false;
+let continuousRecordingEnabled = false, recordingModeAvailable = false;
 let manualRecordingRequested = false;
 let offlinePreview = true;
 let tuningReady = false;
@@ -50,15 +50,21 @@ function logChange(key, value, message) {
 }
 
 function renderSystemStatus(data) {
+  const card = data?.manual_recording?.destination === 'camera_sd' ? data.manual_recording : null;
   const items = Object.entries(names).map(([key, name]) => {
-    const state = data?.components?.[key]?.state || 'offline';
+    const cardIndicator = key === 'recording' && card;
+    const state = cardIndicator ? (card.available ? 'ready' : 'unknown') : data?.components?.[key]?.state || 'offline';
     const item = document.createElement('span');
     item.className = `status-light${state === 'ready' ? ' ready' : ''}`;
-    item.textContent = name;
-    item.title = `${name}:${state}${data?.components?.[key]?.detail ? ' · ' + data.components[key].detail : ''}`;
+    item.textContent = cardIndicator ? '相機卡排程' : name;
+    item.title = cardIndicator ? card.detail : `${name}:${state}${data?.components?.[key]?.detail ? ' · ' + data.components[key].detail : ''}`;
     item.setAttribute('aria-label', item.title);
     return item;
   });
+  if (card) {
+    $('liveInfo').replaceChildren(...items);
+    return;
+  }
   const disk = document.createElement('span');
   disk.className = 'status-disk';
   const metrics = data?.metrics;
@@ -103,6 +109,7 @@ function showTuning() {
 }
 
 function render(data) {
+  window.shoreCameraCard?.render(data);
   window.shoreInferenceControl?.render(data);
   window.shoreKeyboardControl?.render(data);
   offlinePreview = data.offline_preview === true;
@@ -114,7 +121,8 @@ function render(data) {
   const automaticRecording = recording.tracking_requested === true;
   continuousRecordingEnabled = recording.continuous_enabled === true;
   if (!recordingPending) $('continuousRecording').checked = continuousRecordingEnabled;
-  $('continuousRecording').disabled = offlinePreview || recordingPending || typeof recording.continuous_enabled !== 'boolean';
+  recordingModeAvailable = recording.destination !== 'camera_sd' && typeof recording.continuous_enabled === 'boolean';
+  $('continuousRecording').disabled = offlinePreview || recordingPending || !recordingModeAvailable;
   $('recordStatus').textContent = (recording.continuous_requested ? '連續錄影 · ' : automaticRecording ? (recording.tracking_qualified ? '自動跟拍' : '追浪試拍') + ' · ' : manualRecordingRequested ? '手動 · ' : '') + (recording.detail || '') + (recordingActive ? ` · ${recording.elapsed_seconds || 0} 秒` : '');
   const tracking = data.tracking;
   const metrics = data.metrics;
@@ -196,6 +204,7 @@ async function refresh() {
     $('armButton').disabled = offlinePreview || trackingPending;
     renderSystemStatus(null);
     logChange('connection', 'offline', '服務連線中斷');
+    window.shoreCameraCard?.disconnect();
     window.shoreInferenceControl?.disconnect();
     window.shoreKeyboardControl?.disconnect();
     streamNeedsReconnect = true;
@@ -332,7 +341,7 @@ for (const button of document.querySelectorAll('[data-camera-action]')) {
 }
 
 $('continuousRecording').addEventListener('change', async () => {
-  if (offlinePreview || recordingPending) return;
+  if (offlinePreview || recordingPending || !recordingModeAvailable) return;
   const enabled = $('continuousRecording').checked;
   recordingPending = true;
   $('continuousRecording').disabled = true;

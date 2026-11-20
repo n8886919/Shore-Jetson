@@ -97,8 +97,14 @@ function renderOperatorStatus(data) {
     : recording.state === 'starting' ? '錄影準備中' : recordingNow
     ? `${recording.continuous_requested ? '連續錄影' : recording.manual_requested ? '手動錄影' : recording.tracking_qualified ? '跟拍錄影' : '追浪試拍'} · ${Math.max(0,Math.floor(Number(recording.elapsed_seconds)||0))} 秒`
     : recording.detail || '未錄影';
-  nodes.push(chip(recordingNow ? '錄影中' : '未錄影',
-    `recording-badge ${recordingNow ? 'is-recording' : 'not-recording'}`,detail));
+  if (recording.destination === 'camera_sd') {
+    const label = offlinePreview || typeof recording.schedule_enabled !== 'boolean' ? '相機卡排程未知'
+      : recording.schedule_enabled ? '相機卡排程已開' : '相機卡排程已關';
+    nodes.push(chip(label, 'neutral', recording.detail || label));
+  } else {
+    nodes.push(chip(recordingNow ? '錄影中' : '未錄影',
+      `recording-badge ${recordingNow ? 'is-recording' : 'not-recording'}`,detail));
+  }
   const capacity = $('recordingCapacity');
   capacity.hidden = recording.destination === 'camera_sd';
   capacity.textContent = !offlinePreview && Number.isFinite(metrics.used_gib) && Number.isFinite(metrics.free_gib)
@@ -143,6 +149,7 @@ let detectionItems = [], detectionZoom = 1, detectionCenter = .5, detectionTimer
 let trackingDeadband = null, trackingZoneVisible = false, trackingZoneZoom = 1, trackingZoneCenter = .5, trackingTiltEnabled = false;
 $('stream').addEventListener('error', () => { streamNeedsReconnect = true; streamRetryAt = Date.now()+1000; });
 function render(data) {
+  window.shoreCameraCard?.render(data);
   window.shoreInferenceControl?.render(data);
   window.shoreKeyboardControl?.render(data);
   offlinePreview = data.offline_preview === true;
@@ -203,6 +210,7 @@ async function refresh() {
     if (!response.ok) throw new Error('unavailable');
     render(await response.json());
   } catch (_) {
+    window.shoreCameraCard?.disconnect();
     window.shoreInferenceControl?.disconnect();
     window.shoreKeyboardControl?.disconnect();
     window.shoreRemoteVideo?.tick(false);
